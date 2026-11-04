@@ -9,6 +9,15 @@
     <meta property="og:description" content="專業 iPAS 淨零碳規劃師 AI 備考助教與全端開源專案。具備蘇格拉底式引導提示、ISO 14064-1/溫盤標準引證、精選試題模擬與一鍵 GitHub 專案導出資源。" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      // 確保 GitHub Pages 子目錄自動補上結尾斜線，防止靜態資源相對路徑解析為 404
+      if (window.location.hostname.endsWith('github.io')) {
+        const parts = window.location.pathname.split('/').filter(Boolean);
+        if (parts.length === 1 && !window.location.pathname.endsWith('/')) {
+          window.location.replace(window.location.pathname + '/' + window.location.search + window.location.hash);
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

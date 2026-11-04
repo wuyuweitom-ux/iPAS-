@@ -18,10 +18,12 @@ import {
   ExternalLink,
   ChevronRight,
   Key,
-  ShieldCheck
+  ShieldCheck,
+  FileText
 } from 'lucide-react';
 import { ChatMessage, TutorMode } from '../types';
 import { streamGeminiChat, hasApiKey } from '../services/geminiService';
+import { exportNotesToPdf } from '../utils/pdfExport';
 
 interface ChatTutorProps {
   initialPrompt?: string;
@@ -55,6 +57,8 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
   const [enableSearch, setEnableSearch] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -224,20 +228,18 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
     }
   };
 
-  const handleExportChatMarkdown = () => {
-    const mdContent = messages
-      .map(
-        (m) =>
-          `### ${m.role === 'user' ? '👤 考生提問' : '🌿 iPAS AI 助教'} (${m.timestamp})\n\n${m.content}\n\n---`
-      )
-      .join('\n\n');
-    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `iPAS-Study-Notes-${new Date().toISOString().slice(0, 10)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleExportChatPdf = async () => {
+    if (isExportingPdf) return;
+    try {
+      setIsExportingPdf(true);
+      await exportNotesToPdf(messages, (status) => setPdfProgress(status));
+    } catch (err: unknown) {
+      const error = err as Error;
+      alert(`匯出 PDF 發生錯誤: ${error.message}`);
+    } finally {
+      setIsExportingPdf(false);
+      setPdfProgress('');
+    }
   };
 
   // Render markdown text cleanly
@@ -398,12 +400,27 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
           )}
 
           <button
-            onClick={handleExportChatMarkdown}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 text-xs flex items-center space-x-1 transition-all"
-            title="匯出筆記 Markdown"
+            onClick={handleExportChatPdf}
+            disabled={isExportingPdf}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition-all border cursor-pointer ${
+              isExportingPdf
+                ? 'bg-emerald-950/80 border-emerald-600 text-emerald-300'
+                : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-emerald-300 border-slate-700'
+            }`}
+            title="將對話與解題重點匯出為 PDF 檔案"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">匯出筆記</span>
+            {isExportingPdf ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                <span className="hidden sm:inline">{pdfProgress || '產生 PDF...'}</span>
+              </>
+            ) : (
+              <>
+                <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">匯出 PDF 筆記</span>
+                <span className="sm:hidden">PDF</span>
+              </>
+            )}
           </button>
 
           <button
