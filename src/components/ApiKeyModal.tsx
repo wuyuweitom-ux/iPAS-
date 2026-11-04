@@ -9,9 +9,17 @@ import {
   X, 
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Cpu
 } from 'lucide-react';
-import { getStoredApiKey, setStoredApiKey, removeStoredApiKey } from '../services/geminiService';
+import { 
+  getStoredApiKey, 
+  setStoredApiKey, 
+  removeStoredApiKey,
+  getStoredModel,
+  setStoredModel,
+  AVAILABLE_MODELS
+} from '../services/geminiService';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -26,6 +34,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
 }) => {
   const [keyInput, setKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('auto');
   const [hasExistingKey, setHasExistingKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -33,6 +42,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
     if (isOpen) {
       const stored = getStoredApiKey();
       setKeyInput(stored);
+      setSelectedModel(getStoredModel());
       setHasExistingKey(Boolean(stored && stored.length > 5));
       setSavedSuccess(false);
     }
@@ -46,6 +56,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
       return;
     }
     setStoredApiKey(keyInput.trim());
+    setStoredModel(selectedModel);
     setHasExistingKey(true);
     setSavedSuccess(true);
     onKeyUpdated();
@@ -146,6 +157,28 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
               </button>
             </div>
           )}
+        </div>
+
+        {/* Model Selection */}
+        <div className="space-y-2 mb-5 pt-2 border-t border-slate-800">
+          <label className="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
+            <Cpu className="w-3.5 h-3.5 text-teal-400" />
+            <span>AI 模型偏好（具備高流量自動容錯）：</span>
+          </label>
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+          >
+            {AVAILABLE_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            💡 當 Google 伺服器尖峰負載過高 (High Demand 503) 時，系統將自動於後台切換至備援模型（如極速低負載的 <code>gemini-3.1-flash-lite</code>），確保備考問答不中斷。
+          </p>
         </div>
 
         {/* Action Buttons */}
