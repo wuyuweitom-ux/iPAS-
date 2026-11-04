@@ -21,6 +21,7 @@ import {
 } from '../types';
 import { MOCK_QUESTIONS } from '../data/mockQuestions';
 import { STUDY_NOTES } from '../data/studyNotes';
+import { PRELOADED_RAG_DOCS, PRELOADED_RAG_CHUNKS } from '../data/preloadedRagDocs';
 
 // 設定 PDF.js Worker 路徑 (由 Vite 本地打包，支援 GitHub Pages 離線與子目錄運行)
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -250,7 +251,10 @@ function getBuiltInDocsAndChunks(): { docs: RagDocument[]; chunks: RagChunk[] } 
     });
   });
 
-  return { docs, chunks };
+  return {
+    docs: [...PRELOADED_RAG_DOCS, ...docs],
+    chunks: [...PRELOADED_RAG_CHUNKS, ...chunks],
+  };
 }
 
 /**
@@ -722,9 +726,9 @@ export async function retrieveRagContext(
       }
     }
 
-    // 使用者自行上傳的文件給予優先權重加成 (1.25x)，確保優先引用使用者上傳的教材與考古題
+    // 使用者自行上傳的文件與預載入之 115 年官方公告考古題給予優先權重加成，確保優先引用官方真題與上傳教材
     if (!chunk.docId.startsWith('builtin-')) {
-      score *= 1.25;
+      score *= 1.3;
     }
 
     if (score >= 3.2 && matchedTerms.length >= 2) {
@@ -795,4 +799,73 @@ export async function clearUserUploadedRag(): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+/**
+ * 匯出使用者已上傳的所有 RAG 文件與段落為 JSON 知識包檔案
+ * 方便備份、分享給其他考生，或交由開發者寫入預設啟動知識庫
+ */
+export async function exportUserRagBundle(): Promise<void> {
+  const db = await openRagDb();
+  const docs = await new Promise<RagDocument[]>((resolve, reject) => {
+    const req = db.transaction(DOCS_STORE, 'readonly').objectStore(DOCS_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+  const chunks = await new Promise<RagChunk[]>((resolve, reject) => {
+    const req = db.transaction(CHUNKS_STORE, 'readonly').objectStore(CHUNKS_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    docs,
+    chunks,
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `iPAS_RAG_知識庫備份包_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 匯入先前匯出的 RAG JSON 知識包檔案
+ */
+export async function importUserRagBundle(
+  file: File
+): Promise<{ importedDocs: number; importedChunks: number }> {
+  const raw = await file.text();
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.docs) || !Array.isArray(parsed.chunks)) {
+    throw new Error('非有效的 iPAS RAG 知識包格式（缺少 docs 或 chunks 欄位）');
+  }
+
+  const db = await openRagDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([DOCS_STORE, CHUNKS_STORE], 'readwrite');
+    const docStore = tx.objectStore(DOCS_STORE);
+    const chunkStore = tx.objectStore(CHUNKS_STORE);
+    for (const d of parsed.docs) {
+      docStore.put({ ...d, isBuiltIn: false });
+    }
+    for (const c of parsed.chunks) {
+      chunkStore.put(c);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+
+  return {
+    importedDocs: parsed.docs.length,
+    importedChunks: parsed.chunks.length,
+  };
+}
+
 

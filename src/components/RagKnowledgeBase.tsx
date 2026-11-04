@@ -17,6 +17,7 @@ import {
   RefreshCw,
   FolderOpen,
   MessageSquarePlus,
+  Download,
 } from 'lucide-react';
 import { RagDocument, RagChunk, RagDocCategory, RagCitation } from '../types';
 import {
@@ -27,6 +28,8 @@ import {
   deleteRagDocument,
   clearUserUploadedRag,
   retrieveRagContext,
+  exportUserRagBundle,
+  importUserRagBundle,
 } from '../services/ragService';
 import { formatInlineRichText } from '../utils/formatMathAndMarkdown';
 
@@ -86,6 +89,25 @@ export const RagKnowledgeBase: React.FC<RagKnowledgeBaseProps> = ({
   const [isTesting, setIsTesting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bundleInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportBundle = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const { importedDocs, importedChunks } = await importUserRagBundle(files[0]);
+      await loadKnowledgeBase();
+      setSuccessMsg(
+        `成功匯入知識包（共載入 ${importedDocs} 份文件、${importedChunks} 個檢索段落）！`
+      );
+    } catch (err: unknown) {
+      const error = err as Error;
+      setErrorMsg(error.message || '知識包匯入失敗');
+    } finally {
+      if (bundleInputRef.current) bundleInputRef.current.value = '';
+    }
+  };
 
   const loadKnowledgeBase = async () => {
     try {
@@ -463,10 +485,11 @@ export const RagKnowledgeBase: React.FC<RagKnowledgeBaseProps> = ({
             {/* Quick test pills */}
             <div className="flex flex-wrap gap-1.5">
               {[
+                'CBAM 豁免門檻 50噸',
+                'ISO 14068-1 碳中和減量優先順序',
+                '冰水機冷媒 0.007公噸 GWP 1136',
+                '員工出差延人公里碳排放計算',
                 '生質燃料 CO2 報告',
-                '基準年重新計算門檻',
-                '碳費優惠費率自主減量',
-                '產品碳足跡分配階層',
               ].map((sample) => (
                 <button
                   key={sample}
@@ -547,15 +570,44 @@ export const RagKnowledgeBase: React.FC<RagKnowledgeBaseProps> = ({
               目前已掛載之 RAG 教材與考古題清單 ({docs.length})
             </h2>
           </div>
-          {userUploadedCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={bundleInputRef}
+              type="file"
+              accept=".json"
+              onChange={(e) => handleImportBundle(e.target.files)}
+              className="hidden"
+            />
             <button
-              onClick={handleClearAllUserDocs}
-              className="flex items-center space-x-1 text-xs text-red-400 hover:text-red-300 px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-800/40 cursor-pointer self-start"
+              onClick={() => bundleInputRef.current?.click()}
+              className="flex items-center space-x-1 text-xs text-teal-300 hover:text-teal-200 px-2.5 py-1 rounded-lg bg-teal-950/50 border border-teal-800/50 cursor-pointer"
+              title="匯入先前匯出的 RAG 知識庫備份包 (.json)"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>清除所有自訂上傳檔案 ({userUploadedCount})</span>
+              <Upload className="w-3.5 h-3.5" />
+              <span>匯入知識包</span>
             </button>
-          )}
+
+            {userUploadedCount > 0 && (
+              <>
+                <button
+                  onClick={() => exportUserRagBundle()}
+                  className="flex items-center space-x-1 text-xs text-emerald-300 hover:text-emerald-200 px-2.5 py-1 rounded-lg bg-emerald-950/50 border border-emerald-800/50 cursor-pointer"
+                  title="將您上傳的所有 PDF/教材匯出為單一 JSON 知識包，可備份或預載入專案"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>匯出知識包 (.json)</span>
+                </button>
+
+                <button
+                  onClick={handleClearAllUserDocs}
+                  className="flex items-center space-x-1 text-xs text-red-400 hover:text-red-300 px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-800/40 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>清除自訂上傳 ({userUploadedCount})</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="space-y-3">
@@ -582,7 +634,11 @@ export const RagKnowledgeBase: React.FC<RagKnowledgeBaseProps> = ({
                         >
                           {catMeta.label}
                         </span>
-                        {doc.isBuiltIn ? (
+                        {doc.id.startsWith('preload-115-') ? (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
+                            ✨ 115年官方公告真題 (已預載)
+                          </span>
+                        ) : doc.isBuiltIn ? (
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
                             系統內建核心知識
                           </span>
