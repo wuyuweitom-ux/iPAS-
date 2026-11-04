@@ -1,0 +1,6 @@
+# Python 依賴清單 (用於終端執行 ipas_tutor.py)
+# 安裝指令: pip install -r requirements.txt
+
+google-genai>=2.4.0
+python-dotenv>=1.0.0
+rich>=13.0.0

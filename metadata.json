@@ -1,0 +1,6 @@
+{
+  "name": "iPAS 淨零碳規劃師備考助教 (GitHub Repo Ready)",
+  "description": "專業 iPAS 淨零碳規劃師 AI 備考助教與全端開源專案。具備蘇格拉底式引導提示、ISO 14064-1/溫盤標準引證、精選試題模擬與一鍵 GitHub 專案導出資源。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
