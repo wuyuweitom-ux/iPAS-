@@ -16,18 +16,23 @@ import {
   VolumeX, 
   Download, 
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  Key,
+  ShieldCheck
 } from 'lucide-react';
 import { ChatMessage, TutorMode } from '../types';
+import { streamGeminiChat, hasApiKey } from '../services/geminiService';
 
 interface ChatTutorProps {
   initialPrompt?: string;
   onClearInitialPrompt?: () => void;
+  onOpenApiKeyModal?: () => void;
 }
 
 export const ChatTutor: React.FC<ChatTutorProps> = ({
   initialPrompt,
   onClearInitialPrompt,
+  onOpenApiKeyModal,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -125,73 +130,41 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
     setMessages([...newMessages, assistantMessage]);
 
     try {
-      const response = await fetch('/api/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
-          enableSearch,
-          customSystemInstruction: getSystemPromptByMode(mode),
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`伺服器回應錯誤 (${response.status})`);
-      }
-
-      if (!response.body) {
-        throw new Error('無法讀取伺服器串流');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
       let accumulatedContent = '';
-      let groundingData: Array<{ uri: string; title?: string }> = [];
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunkStr = decoder.decode(value, { stream: true });
-        const lines = chunkStr.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6).trim();
-            if (dataStr === '[DONE]') break;
-
-            try {
-              const parsed = JSON.parse(dataStr);
-              if (parsed.text) {
-                accumulatedContent += parsed.text;
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: accumulatedContent, groundingUrls: groundingData }
-                      : m
-                  )
-                );
-              }
-              if (parsed.grounding) {
-                groundingData = parsed.grounding.map((g: any) => ({
-                  uri: g.web?.uri || g.uri || '',
-                  title: g.web?.title || g.title || '相關參考資料',
-                }));
-              }
-              if (parsed.error) {
-                accumulatedContent += `\n\n⚠️ **提示**：${parsed.error}`;
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId ? { ...m, content: accumulatedContent } : m
-                  )
-                );
-              }
-            } catch {
-              // Ignore parse errors on incomplete chunks
-            }
-          }
+      await streamGeminiChat(
+        newMessages.map((m) => ({ role: m.role, content: m.content })),
+        mode,
+        enableSearch,
+        {
+          onChunk: (text: string) => {
+            accumulatedContent += text;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: accumulatedContent } : m
+              )
+            );
+          },
+          onDone: () => {
+            setIsLoading(false);
+          },
+          onError: (err: Error) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content:
+                        accumulatedContent +
+                        `\n\n⚠️ **提示**：${err.message}`,
+                    }
+                  : m
+              )
+            );
+            setIsLoading(false);
+          },
         }
-      }
+      );
     } catch (err: unknown) {
       const error = err as Error;
       setMessages((prev) =>
@@ -199,12 +172,11 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
           m.id === assistantId
             ? {
                 ...m,
-                content: `抱歉，與伺服器連線時發生錯誤：${error.message}。\n請確認後端已正常啟動並已配置 \`GEMINI_API_KEY\`。`,
+                content: `發生錯誤：${error.message}`,
               }
             : m
         )
       );
-    } finally {
       setIsLoading(false);
     }
   };
@@ -407,6 +379,23 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
               }`}
             />
           </button>
+
+          {/* API Key Status / Setting */}
+          {onOpenApiKeyModal && (
+            <button
+              onClick={onOpenApiKeyModal}
+              className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                hasApiKey()
+                  ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/60'
+                  : 'bg-amber-950/60 border-amber-700/50 text-amber-300 hover:bg-amber-900/60'
+              }`}
+              title={hasApiKey() ? '已儲存個人 Gemini Key (點擊管理或更換)' : '目前為離線模式 (點擊設定 Key)'}
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{hasApiKey() ? 'API Key 已配置' : '設定 Key'}</span>
+              <span className="sm:hidden">{hasApiKey() ? 'Key' : 'Key'}</span>
+            </button>
+          )}
 
           <button
             onClick={handleExportChatMarkdown}

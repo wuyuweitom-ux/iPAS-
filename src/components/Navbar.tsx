@@ -3,19 +3,22 @@ import {
   Bot, 
   BookOpen, 
   HelpCircle, 
-  Sparkles
+  Sparkles,
+  Key
 } from 'lucide-react';
 
 interface NavbarProps {
   activeTab: 'chat' | 'exam' | 'guide';
   setActiveTab: (tab: 'chat' | 'exam' | 'guide') => void;
   hasApiKey: boolean;
+  onOpenApiKeyModal: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   setActiveTab,
-  hasApiKey
+  hasApiKey,
+  onOpenApiKeyModal
 }) => {
   return (
     <header className="bg-slate-900 border-b border-emerald-800/40 sticky top-0 z-40 backdrop-blur-md bg-opacity-95 text-white">
@@ -79,11 +82,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </nav>
 
-          {/* Status Badge */}
-          <div className="flex items-center space-x-2 sm:space-x-3">
-            <div className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700 text-slate-300">
-              <span className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span>Gemini 3.8 Flash</span>
+          {/* Status Badge & API Key Setting */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={onOpenApiKeyModal}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                hasApiKey
+                  ? 'bg-emerald-950/80 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/60 shadow-sm'
+                  : 'bg-amber-950/70 border-amber-700/60 text-amber-300 hover:bg-amber-900/60 animate-pulse'
+              }`}
+              title="點擊設定個人 Gemini API Key"
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{hasApiKey ? 'API Key 已配置' : '設定 API Key'}</span>
+              <span className="sm:hidden">{hasApiKey ? '已設Key' : '設Key'}</span>
+            </button>
+
+            <div className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700 text-slate-300">
+              <span className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+              <span>{hasApiKey ? 'Gemini 2.5 在線' : '離線知識庫'}</span>
             </div>
           </div>
         </div>
