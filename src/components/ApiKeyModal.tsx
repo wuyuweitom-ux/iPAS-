@@ -5,12 +5,14 @@ import {
   ExternalLink, 
   Check, 
   Trash2, 
-  AlertCircle, 
   X, 
   Lock,
   Eye,
   EyeOff,
-  Cpu
+  Cpu,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { 
   getStoredApiKey, 
@@ -18,7 +20,9 @@ import {
   removeStoredApiKey,
   getStoredModel,
   setStoredModel,
-  AVAILABLE_MODELS
+  DEFAULT_MODELS,
+  fetchAvailableModelsForKey,
+  ModelOption
 } from '../services/geminiService';
 
 interface ApiKeyModalProps {
@@ -35,8 +39,11 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
   const [keyInput, setKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState('auto');
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODELS);
   const [hasExistingKey, setHasExistingKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -45,8 +52,53 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
       setSelectedModel(getStoredModel());
       setHasExistingKey(Boolean(stored && stored.length > 5));
       setSavedSuccess(false);
+      setTestResult(null);
+
+      if (stored && stored.length > 10) {
+        loadModelsForKey(stored, false);
+      }
     }
   }, [isOpen]);
+
+  const loadModelsForKey = async (keyToTest: string, showFeedback: boolean) => {
+    if (!keyToTest.trim()) return;
+    setIsTestingKey(true);
+    if (showFeedback) setTestResult(null);
+
+    try {
+      const detected = await fetchAvailableModelsForKey(keyToTest.trim());
+      if (detected.length > 0) {
+        const dynamicOptions: ModelOption[] = [
+          { id: 'auto', name: 'Auto 智慧自動選擇 (優先選擇低負載可用模型，推薦)' },
+          ...detected.map((id) => ({
+            id,
+            name: `${id} (已驗證您的金鑰支援)`,
+          })),
+        ];
+        setModelOptions(dynamicOptions);
+        if (showFeedback) {
+          setTestResult({
+            ok: true,
+            msg: `金鑰驗證成功！偵測到 ${detected.length} 個可用 Gemini 模型。`,
+          });
+        }
+      } else if (showFeedback) {
+        setTestResult({
+          ok: false,
+          msg: '無法取得可用模型清單，請確認 API Key 是否正確。',
+        });
+      }
+    } catch {
+      if (showFeedback) {
+        setTestResult({
+          ok: false,
+          msg: '連線測試失敗，請檢查網路或 API Key。',
+        });
+      }
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -62,14 +114,15 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
     onKeyUpdated();
     setTimeout(() => {
       onClose();
-    }, 1200);
+    }, 900);
   };
 
   const handleRemove = () => {
-    if (window.confirm('確定要從瀏覽器清除儲存的 API Key 嗎？清除後將自動切換為內建離線知識庫模式。')) {
+    if (window.confirm('確定要從瀏覽器清除儲存的 API Key 嗎？清除後將切換為內建離線知識庫模式。')) {
       removeStoredApiKey();
       setKeyInput('');
       setHasExistingKey(false);
+      setTestResult(null);
       onKeyUpdated();
     }
   };
@@ -91,7 +144,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
             <Key className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-slate-100">Gemini API Key 設定</h3>
+            <h3 className="text-lg font-bold text-slate-100">Gemini API Key 與模型設定</h3>
             <p className="text-xs text-slate-400">純靜態網頁 Zero-Leak 安全架構</p>
           </div>
         </div>
@@ -105,7 +158,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
           <ul className="list-disc list-inside space-y-1 text-slate-300 text-[11px] leading-relaxed">
             <li>本網站為<strong>純靜態網頁 (Static SPA)</strong>，專案原始碼中絕無寫入任何 API Key。</li>
             <li>您填寫的金鑰僅存放於<strong>您個人的瀏覽器 LocalStorage</strong>。</li>
-            <li>所有 AI 問答直接向 Google 官方端點請求，<strong>不經任何第三方伺服器</strong>，您可以放心將專案推送到 GitHub。</li>
+            <li>所有 AI 問答直接向 Google 官方端點請求，<strong>不經任何第三方伺服器</strong>。</li>
           </ul>
         </div>
 
@@ -124,22 +177,51 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
             </a>
           </div>
 
-          <div className="relative">
-            <input
-              type={showKey ? 'text' : 'password'}
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              placeholder="AIzaSy..."
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono pr-10"
-            />
+          <div className="flex items-center space-x-2">
+            <div className="relative flex-1">
+              <input
+                type={showKey ? 'text' : 'password'}
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey(!showKey)}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+              >
+                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+
             <button
               type="button"
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+              onClick={() => loadModelsForKey(keyInput, true)}
+              disabled={!keyInput.trim() || isTestingKey}
+              className="px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-slate-700 text-xs font-medium flex items-center space-x-1.5 shrink-0 transition-all cursor-pointer disabled:opacity-50"
             >
-              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              <RefreshCw className={`w-3.5 h-3.5 ${isTestingKey ? 'animate-spin' : ''}`} />
+              <span>測試並偵測模型</span>
             </button>
           </div>
+
+          {testResult && (
+            <div
+              className={`flex items-center space-x-1.5 text-xs p-2.5 rounded-lg border ${
+                testResult.ok
+                  ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300'
+                  : 'bg-red-950/60 border-red-700/60 text-red-300'
+              }`}
+            >
+              {testResult.ok ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0" />
+              )}
+              <span>{testResult.msg}</span>
+            </div>
+          )}
 
           {hasExistingKey && (
             <div className="flex items-center justify-between text-xs pt-1">
@@ -160,24 +242,24 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
         </div>
 
         {/* Model Selection */}
-        <div className="space-y-2 mb-5 pt-2 border-t border-slate-800">
+        <div className="space-y-2 mb-5 pt-3 border-t border-slate-800">
           <label className="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
             <Cpu className="w-3.5 h-3.5 text-teal-400" />
-            <span>AI 模型偏好（具備高流量自動容錯）：</span>
+            <span>選擇 Gemini 模型：</span>
           </label>
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
             className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
           >
-            {AVAILABLE_MODELS.map((m) => (
+            {modelOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
               </option>
             ))}
           </select>
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            💡 當 Google 伺服器尖峰負載過高 (High Demand 503) 時，系統將自動於後台切換至備援模型（如極速低負載的 <code>gemini-3.1-flash-lite</code>），確保備考問答不中斷。
+            💡 點擊上方「測試並偵測模型」可自動向 Google 伺服器查詢您的 API Key 實際支援的所有模型清單。
           </p>
         </div>
 
@@ -203,7 +285,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
             ) : (
               <>
                 <Lock className="w-3.5 h-3.5" />
-                <span>安全儲存至瀏覽器</span>
+                <span>儲存設定</span>
               </>
             )}
           </button>

@@ -1,14 +1,12 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
- * 靜態網頁版專用 Gemini API 呼叫服務 (純客戶端 Zero-Leak 安全架構 + 多模型自動容錯)
+ *
+ * 靜態網頁版專用 Gemini API 呼叫服務 (純客戶端 Zero-Leak 安全架構)
  * -------------------------------------------------------------
  * 1. 原始碼中【絕無】寫入任何 API Key，專案推送到 GitHub Pages 絕對安全！
- * 2. 使用者的 API Key 僅儲存於其個人電腦之瀏覽器 LocalStorage。
- * 3. 具備【智慧故障轉移 (Failover)】：當某一模型遭遇 Google 尖峰流量 (High Demand 503) 時，
- *    系統自動切換至備援模型（如 gemini-3.1-flash-lite 或 gemini-flash-latest），徹底解決塞車報錯。
- * 4. 若使用者未輸入金鑰或連線中斷，自動切換至【內建 iPAS 離線知識庫引擎】！
+ * 2. 自動過濾對話歷史，確保符合 Gemini API「首則必須為 user 且角色嚴格交替」之規範。
+ * 3. 支援動態查詢帳號可用模型 (v1beta/models)，並具備智慧故障轉移與真實錯誤回報。
  */
 
 import { TutorMode } from '../types';
@@ -16,11 +14,19 @@ import { TutorMode } from '../types';
 const STORAGE_KEY = 'ipas_gemini_api_key';
 const MODEL_STORAGE_KEY = 'ipas_gemini_selected_model';
 
-export const AVAILABLE_MODELS = [
-  { id: 'auto', name: 'Auto 智慧自動容錯 (遇尖峰流量自動切換，推薦)' },
-  { id: 'gemini-3.1-flash-lite', name: 'gemini-3.1-flash-lite (極速穩定・避開尖峰高負載)' },
-  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (旗艦高推理模型)' },
-  { id: 'gemini-flash-latest', name: 'gemini-flash-latest (最新穩定版)' },
+export interface ModelOption {
+  id: string;
+  name: string;
+}
+
+export const DEFAULT_MODELS: ModelOption[] = [
+  { id: 'auto', name: 'Auto 智慧自動選擇 (自動偵測可用與低負載模型，推薦)' },
+  { id: 'gemini-flash-lite-latest', name: 'gemini-flash-lite-latest (官方 Lite 最新穩定別名・極速低負載)' },
+  { id: 'gemini-flash-latest', name: 'gemini-flash-latest (官方 Flash 最新穩定別名)' },
+  { id: 'gemini-3.1-flash-lite-preview', name: 'gemini-3.1-flash-lite-preview (3.1 Flash Lite)' },
+  { id: 'gemini-3-flash-preview', name: 'gemini-3-flash-preview (3.0 Flash)' },
+  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (3.8 Flash)' },
+  { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite (2.5 Flash Lite)' },
 ];
 
 export function getStoredApiKey(): string {
@@ -67,6 +73,45 @@ export function setStoredModel(model: string): void {
   }
 }
 
+/**
+ * 動態向 Google API 查詢該 API Key 實際支援 generateContent 的模型清單
+ */
+export async function fetchAvailableModelsForKey(apiKey: string): Promise<string[]> {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data.models)) return [];
+
+    const validModels: string[] = [];
+    for (const m of data.models) {
+      const name: string = (m.name || '').replace(/^models\//, '');
+      const methods: string[] = m.supportedGenerationMethods || [];
+      if (
+        methods.includes('generateContent') &&
+        name.startsWith('gemini-') &&
+        !name.includes('embedding') &&
+        !name.includes('imagen') &&
+        !name.includes('veo') &&
+        !name.includes('tts') &&
+        !name.includes('audio') &&
+        !name.includes('live') &&
+        !name.includes('image') &&
+        !name.includes('robotics') &&
+        !name.includes('computer-use') &&
+        !name.includes('2.5-flash') // 避開對新帳號停用的 2.5-flash
+      ) {
+        validModels.push(name);
+      }
+    }
+    return validModels;
+  } catch {
+    return [];
+  }
+}
+
 // 系統預設提示詞
 const SYSTEM_INSTRUCTION = `你是一位專業且權威的 iPAS 淨零碳規劃師備考助教（具備 ISO 14064-1/2/3 主導稽核員與碳審計專家背景）。
 請協助考生準備經濟部 iPAS 淨零碳規劃師能力鑑定（科目一：淨零碳規劃基礎與法規；科目二：企業溫室氣體盤查與碳足跡實務）。
@@ -94,7 +139,54 @@ export interface StreamCallbacks {
 }
 
 /**
- * 透過 Google 官方端點串流呼叫 Gemini API (支援多模型自動故障轉移)
+ * 清理並正規化對話歷史：
+ * 1. 移除開頭的 assistant 歡迎詞（Gemini API 規定第一則訊息必須是 role: 'user'）
+ * 2. 移除空白或系統錯誤訊息
+ * 3. 確保 user 與 model 角色嚴格交替，避免觸發 400 INVALID_ARGUMENT
+ */
+function buildValidGeminiContents(messages: ChatMessagePayload[]) {
+  const cleaned = messages.filter(
+    (m) =>
+      m.content &&
+      m.content.trim().length > 0 &&
+      !m.content.includes('⚠️ **提示**') &&
+      !m.content.includes('發生錯誤：')
+  );
+
+  const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+  for (const m of cleaned) {
+    const role: 'user' | 'model' = m.role === 'assistant' ? 'model' : 'user';
+
+    // 第一則訊息必須是 user，跳過開頭的預設 assistant 歡迎訊息
+    if (contents.length === 0 && role === 'model') {
+      continue;
+    }
+
+    // 若與上一則訊息同角色，合併文字，確保嚴格交替
+    if (contents.length > 0 && contents[contents.length - 1].role === role) {
+      contents[contents.length - 1].parts[0].text += `\n\n${m.content.trim()}`;
+    } else {
+      contents.push({
+        role,
+        parts: [{ text: m.content.trim() }],
+      });
+    }
+  }
+
+  // 只保留最近 10 輪對話（且確保第一則是 user）
+  while (contents.length > 10) {
+    contents.shift();
+  }
+  while (contents.length > 0 && contents[0].role !== 'user') {
+    contents.shift();
+  }
+
+  return contents;
+}
+
+/**
+ * 透過 Google 官方端點串流呼叫 Gemini API
  */
 export async function streamGeminiChat(
   messages: ChatMessagePayload[],
@@ -104,41 +196,47 @@ export async function streamGeminiChat(
 ): Promise<void> {
   const apiKey = getStoredApiKey();
 
-  // 若使用者未配置 API Key，切換至內建離線知識庫引擎
+  // 僅在「完全未設定 API Key」時，才使用內建離線知識庫引擎
   if (!apiKey) {
     simulateOfflineResponse(messages[messages.length - 1]?.content || '', mode, callbacks);
     return;
   }
 
-  // 轉換對話歷史為 Gemini REST API 格式
-  const contents = messages.map((m) => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+  const contents = buildValidGeminiContents(messages);
+  if (contents.length === 0) {
+    callbacks.onError(new Error('請輸入有效的問題內容。'));
+    return;
+  }
 
   const systemPrompt = getModeSystemPrompt(mode);
   const tools = enableSearch ? [{ googleSearch: {} }] : undefined;
 
-  // 決定嘗試的模型候選順序（若遇 High Demand 自動無縫降級切換）
   const userPreferredModel = getStoredModel();
-  let candidateModels: string[];
 
+  // 預設優先候選順序：優先使用官方支援度最廣、負載最低的 Flash Lite / Flash 最新別名
+  const defaultFallbacks = [
+    'gemini-flash-lite-latest',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-flash-latest',
+    'gemini-3-flash-preview',
+    'gemini-3.8-flash',
+  ];
+
+  let candidateModels: string[];
   if (userPreferredModel === 'auto') {
-    // 預設先用極速不易塞車的 3.1-flash-lite，若失敗依序嘗試 3.8-flash 與 flash-latest
-    candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+    candidateModels = [...defaultFallbacks];
   } else {
-    // 若使用者指定了特定模型，優先嘗試，若遇高負載再依序容錯備援
+    // 若使用者手動指定了某個模型，優先嘗試該模型，若遇 503/404 再自動退回備援清單
     candidateModels = [
       userPreferredModel,
-      ...['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'].filter((m) => m !== userPreferredModel),
+      ...defaultFallbacks.filter((m) => m !== userPreferredModel),
     ];
   }
 
-  let lastErrorMessage = '';
-  let successfulCall = false;
+  const errorsByModel: string[] = [];
 
   for (const modelToTry of candidateModels) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
 
     try {
       const response = await fetch(url, {
@@ -159,35 +257,39 @@ export async function streamGeminiChat(
         const errorData = await response.json().catch(() => ({}));
         const rawMessage = errorData.error?.message || `HTTP ${response.status}`;
 
-        // 檢查金鑰無效錯誤
-        if (response.status === 400 && rawMessage.includes('API_KEY_INVALID')) {
-          throw new Error('您的 Gemini API Key 無效，請點擊右上角「API Key 設定」重新填寫正確金鑰。');
+        // 1. 若為 API Key 無效或權限錯誤，立即中止並回報給使用者，不需重試其他模型
+        if (
+          response.status === 400 &&
+          (rawMessage.includes('API_KEY_INVALID') || rawMessage.toLowerCase().includes('api key not valid'))
+        ) {
+          callbacks.onError(
+            new Error('您的 Gemini API Key 無效，請點擊右上角「API Key 設定」重新檢查並貼上正確金鑰。')
+          );
+          return;
         }
 
-        // 檢查是否為模型高負載或暫時不可用 (High Demand / Overloaded / 503 / 429)
-        const isHighDemand =
-          response.status === 503 ||
-          response.status === 429 ||
-          rawMessage.toLowerCase().includes('high demand') ||
-          rawMessage.toLowerCase().includes('temporar') ||
-          rawMessage.toLowerCase().includes('unavailable');
-
-        if (isHighDemand) {
-          console.warn(`[Gemini Failover] 模型 ${modelToTry} 目前尖峰流量過高 (${rawMessage})，正在自動切換至備援模型...`);
-          lastErrorMessage = rawMessage;
-          continue; // 嘗試下一個候選模型
+        if (response.status === 403) {
+          callbacks.onError(
+            new Error(`API 權限被拒 (403)：${rawMessage}`)
+          );
+          return;
         }
 
-        throw new Error(`Gemini API 錯誤: ${rawMessage}`);
+        // 2. 紀錄該模型失敗原因，並繼續嘗試下一個備援模型
+        console.warn(`[Gemini Failover] 模型 ${modelToTry} 回應 ${response.status}: ${rawMessage}`);
+        errorsByModel.push(`[${modelToTry}] ${rawMessage}`);
+        continue;
       }
 
       if (!response.body) {
-        throw new Error('無法讀取串流資料');
+        errorsByModel.push(`[${modelToTry}] 無法讀取回應串流`);
+        continue;
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
+      let receivedAnyText = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -198,44 +300,125 @@ export async function streamGeminiChat(
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6).trim();
-            if (jsonStr === '[DONE]') continue;
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            const jsonStr = trimmed.slice(5).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
             try {
               const data = JSON.parse(jsonStr);
-              const chunkText =
-                data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-              if (chunkText) {
-                callbacks.onChunk(chunkText);
+              const parts = data.candidates?.[0]?.content?.parts || [];
+              for (const part of parts) {
+                if (part.text) {
+                  receivedAnyText = true;
+                  callbacks.onChunk(part.text);
+                }
               }
             } catch {
-              // ignore partial JSON
+              // 忽略不完整的 JSON 片段
             }
           }
         }
       }
 
-      successfulCall = true;
-      callbacks.onDone();
-      break; // 成功完成串流，跳出模型循環
-    } catch (err: unknown) {
-      const error = err as Error;
-      // 若為金鑰錯誤直接拋出
-      if (error.message.includes('API Key 無效')) {
-        callbacks.onError(error);
-        return;
+      // 處理殘留於 buffer 的最後一行
+      if (buffer.trim().startsWith('data:')) {
+        const jsonStr = buffer.trim().slice(5).trim();
+        if (jsonStr && jsonStr !== '[DONE]') {
+          try {
+            const data = JSON.parse(jsonStr);
+            const parts = data.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              if (part.text) {
+                receivedAnyText = true;
+                callbacks.onChunk(part.text);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
       }
-      lastErrorMessage = error.message;
-      // 繼續嘗試下一個備援模型
+
+      if (receivedAnyText) {
+        callbacks.onDone();
+        return; // 成功完成串流！
+      } else {
+        errorsByModel.push(`[${modelToTry}] 模型未回傳文字內容`);
+        continue;
+      }
+    } catch (networkErr: unknown) {
+      const err = networkErr as Error;
+      errorsByModel.push(`[${modelToTry}] 網路連線異常: ${err.message}`);
+      continue;
     }
   }
 
-  // 若所有候選模型皆因 Google 尖峰流量無法連線，無縫退回離線知識庫
-  if (!successfulCall) {
-    console.warn('[Gemini Failover] 所有線上模型皆處於尖峰高負載，啟用離線知識庫解答');
-    callbacks.onChunk('*(💡 提示：Google 官方伺服器目前處於高流量尖峰，已自動為您啟動「內建離線知識庫」為您解答考點)*\n\n');
-    simulateOfflineResponse(messages[messages.length - 1]?.content || '', mode, callbacks);
+  // 若候選清單皆失敗，嘗試動態向 Google 查詢該 Key 支援的模型並呼叫第一個可用模型
+  const dynamicModels = await fetchAvailableModelsForKey(apiKey);
+  const untriedDynamic = dynamicModels.filter((m) => !candidateModels.includes(m));
+
+  for (const dynModel of untriedDynamic.slice(0, 3)) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${dynModel}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents,
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          tools,
+        }),
+      });
+
+      if (response.ok && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let receivedAnyText = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('data:')) {
+              const jsonStr = trimmed.slice(5).trim();
+              if (!jsonStr || jsonStr === '[DONE]') continue;
+              try {
+                const data = JSON.parse(jsonStr);
+                const parts = data.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  if (part.text) {
+                    receivedAnyText = true;
+                    callbacks.onChunk(part.text);
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+
+        if (receivedAnyText) {
+          callbacks.onDone();
+          return;
+        }
+      }
+    } catch {
+      // ignore and continue
+    }
   }
+
+  // 若全部嘗試皆失敗，明確回報真實 API 錯誤訊息，不再誤導為高流量尖峰
+  callbacks.onError(
+    new Error(
+      `無法完成 Gemini API 請求。詳細原因：\n${errorsByModel.join('\n')}`
+    )
+  );
 }
 
 function getModeSystemPrompt(m: TutorMode): string {
@@ -258,7 +441,7 @@ function getModeSystemPrompt(m: TutorMode): string {
 }
 
 /**
- * 內建 iPAS 離線知識庫智慧模擬 (當使用者未設定 API Key 或 Google 塞車時啟動)
+ * 內建 iPAS 離線知識庫智慧模擬 (僅當使用者未設定 API Key 時啟動)
  */
 function simulateOfflineResponse(
   query: string,
@@ -319,9 +502,9 @@ function simulateOfflineResponse(
    - 優惠費率：提出自主減量計畫並經核定者，達指定行業基準可享優惠費率 **100 元**；達 SBTi 積極標準可享優惠費率 **50 元**。
 3. **碳洩漏風險產業**：可申請排放量調整係數（分三期漸進退場：0.2 -> 0.4 -> 0.6），以利產業轉型。`;
   } else {
-    reply = `### 🌿 iPAS 淨零碳規劃師 助教提示
+    reply = `### 🌿 iPAS 淨零碳規劃師 離線知識庫提示
 
-你好！您剛才詢問的內容已由**離線知識庫引擎**接收。
+你好！目前尚未設定個人 Gemini API Key，系統正以**內建離線知識庫**為您服務。
 
 💡 **核心備考思維指引**：
 - 在 iPAS 考試中，請優先確認題目問的是 **組織層級 (ISO 14064-1)** 還是 **產品層級 (ISO 14067 碳足跡)**。
@@ -329,10 +512,9 @@ function simulateOfflineResponse(
 - 若為計算題，請牢記核心通式：**$E = AD \\times EF \\times GWP$**，並務必檢驗單位是否已換算為公噸 CO2e。
 
 ---
-🔒 *提示：若目前為離線或 Google 尖峰高負載狀態，題庫與速查功能依然完全可用。待流量恢復後即可正常使用實時 AI 助教！*`;
+🔑 *若要啟用即時 AI 動態解題，請點擊右上角「設定 API Key」填入您的 Google Gemini API Key。*`;
   }
 
-  // 模擬串流打字效果
   let index = 0;
   const timer = setInterval(() => {
     if (index < reply.length) {
