@@ -9,6 +9,56 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { ChatMessage } from '../types';
+import {
+  formatInlineRichText,
+  convertLatexToHtml,
+  normalizeBlockMath,
+} from './formatMathAndMarkdown';
+
+function renderMessageHtmlForPdf(content: string): string {
+  const normalized = normalizeBlockMath(content);
+  const blocks = normalized.split(/\n{2,}/);
+
+  return blocks
+    .map((rawBlock) => {
+      const b = rawBlock.trim();
+      if (!b) return '';
+      if (b.startsWith('$$') && b.endsWith('$$')) {
+        const inner = b.slice(2, -2).trim();
+        return `<div style="background: #f0fdf4; border: 1px solid #a7f3d0; border-radius: 6px; padding: 8px 12px; margin: 8px 0; text-align: center; font-size: 14px;">${convertLatexToHtml(
+          inner,
+          true
+        )}</div>`;
+      }
+      if (b.startsWith('### ')) {
+        return `<div style="font-weight: 700; color: #065f46; font-size: 14px; margin-top: 8px; margin-bottom: 4px;">${formatInlineRichText(
+          b.replace(/^###\s+/, ''),
+          true
+        )}</div>`;
+      }
+      if (b.startsWith('## ') || b.startsWith('# ')) {
+        return `<div style="font-weight: 800; color: #047857; font-size: 15px; margin-top: 10px; margin-bottom: 4px;">${formatInlineRichText(
+          b.replace(/^#{1,2}\s+/, ''),
+          true
+        )}</div>`;
+      }
+      const lines = b
+        .split('\n')
+        .map((line) => {
+          const trimmed = line.trim();
+          if (/^[-*•]\s+/.test(trimmed)) {
+            return `<div style="padding-left: 10px; margin: 2px 0;">• ${formatInlineRichText(
+              trimmed.replace(/^[-*•]\s+/, ''),
+              true
+            )}</div>`;
+          }
+          return `<div>${formatInlineRichText(line, true)}</div>`;
+        })
+        .join('');
+      return `<div style="margin-bottom: 8px;">${lines}</div>`;
+    })
+    .join('');
+}
 
 export async function exportNotesToPdf(
   messages: ChatMessage[],
@@ -70,14 +120,9 @@ export async function exportNotesToPdf(
     <!-- 對話內容條列 -->
     <div style="display: flex; flex-direction: column; gap: 18px;">
       ${messages
-        .map((m, idx) => {
+        .map((m) => {
           const isUser = m.role === 'user';
-          // 簡易處理 Markdown 格式
-          const formattedText = m.content
-            .replace(/\*\*(.*?)\*\*/g, '<strong style="color: #047857;">$1</strong>')
-            .replace(/`([^`]+)`/g, '<code style="background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: 12px; font-family: monospace; color: #0f766e;">$1</code>')
-            .replace(/\n\n/g, '<br/><br/>')
-            .replace(/\n- /g, '<br/>• ');
+          const formattedText = renderMessageHtmlForPdf(m.content);
 
           if (isUser) {
             return `

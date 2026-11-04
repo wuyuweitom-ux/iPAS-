@@ -24,6 +24,12 @@ import {
 import { ChatMessage, TutorMode } from '../types';
 import { streamGeminiChat, hasApiKey } from '../services/geminiService';
 import { exportNotesToPdf } from '../utils/pdfExport';
+import {
+  formatInlineRichText,
+  convertLatexToHtml,
+  normalizeBlockMath,
+  cleanTextForSpeech,
+} from '../utils/formatMathAndMarkdown';
 
 interface ChatTutorProps {
   initialPrompt?: string;
@@ -199,8 +205,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         return;
       }
       window.speechSynthesis.cancel();
-      // Clean markdown tags for clearer speech
-      const cleanText = text.replace(/[*#`_>-]/g, '').trim();
+      const cleanText = cleanTextForSpeech(text);
       const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.lang = 'zh-TW';
       utterance.rate = 1.05;
@@ -242,25 +247,32 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
     }
   };
 
-  // Render markdown text cleanly
+  // Render markdown, chemical formulas (CO₂, CH₄...), and LaTeX calculation formulas cleanly
   const renderFormattedContent = (content: string) => {
+    const normalized = normalizeBlockMath(content);
+    const paragraphs = normalized.split(/\n{2,}/);
+
     return (
-      <div className="space-y-2 text-slate-100 text-sm leading-relaxed">
-        {content.split('\n\n').map((paragraph, pIdx) => {
-          if (paragraph.startsWith('### ')) {
+      <div className="space-y-2.5 text-slate-100 text-sm leading-relaxed">
+        {paragraphs.map((rawParagraph, pIdx) => {
+          const paragraph = rawParagraph.trim();
+          if (!paragraph) return null;
+
+          // 1. 區塊數學公式 $$ ... $$
+          if (paragraph.startsWith('$$') && paragraph.endsWith('$$')) {
+            const innerMath = paragraph.slice(2, -2).trim();
             return (
-              <h4 key={pIdx} className="font-bold text-emerald-300 text-base mt-2">
-                {paragraph.replace('### ', '')}
-              </h4>
+              <div
+                key={pIdx}
+                className="bg-slate-950/90 border border-emerald-800/50 rounded-xl px-4 py-3 my-2 text-center text-base overflow-x-auto shadow-inner"
+                dangerouslySetInnerHTML={{
+                  __html: convertLatexToHtml(innerMath, false),
+                }}
+              />
             );
           }
-          if (paragraph.startsWith('## ')) {
-            return (
-              <h3 key={pIdx} className="font-bold text-emerald-400 text-lg mt-3">
-                {paragraph.replace('## ', '')}
-              </h3>
-            );
-          }
+
+          // 2. 程式碼區塊 ``` ... ```
           if (paragraph.startsWith('```')) {
             const lines = paragraph.split('\n');
             const code = lines.slice(1, -1).join('\n');
@@ -273,32 +285,157 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
               </pre>
             );
           }
-          // Handle bullet lines
-          if (paragraph.includes('\n- ') || paragraph.startsWith('- ')) {
-            const items = paragraph.split('\n').filter((l) => l.trim().length > 0);
+
+          // 3. 標題 H4 / H3 / H2
+          if (paragraph.startsWith('#### ')) {
             return (
-              <ul key={pIdx} className="list-disc list-inside space-y-1 pl-1 text-slate-200">
-                {items.map((it, itIdx) => (
-                  <li key={itIdx}>
-                    <span
-                      dangerouslySetInnerHTML={{
-                        __html: it.replace(/^- /, '').replace(/\*\*(.*?)\*\*/g, '<strong class="text-emerald-300">$1</strong>'),
-                      }}
-                    />
-                  </li>
-                ))}
-              </ul>
+              <h5
+                key={pIdx}
+                className="font-bold text-teal-300 text-sm mt-2"
+                dangerouslySetInnerHTML={{
+                  __html: formatInlineRichText(paragraph.replace(/^####\s+/, ''), false),
+                }}
+              />
             );
           }
+          if (paragraph.startsWith('### ')) {
+            return (
+              <h4
+                key={pIdx}
+                className="font-bold text-emerald-300 text-base mt-2"
+                dangerouslySetInnerHTML={{
+                  __html: formatInlineRichText(paragraph.replace(/^###\s+/, ''), false),
+                }}
+              />
+            );
+          }
+          if (paragraph.startsWith('## ') || paragraph.startsWith('# ')) {
+            return (
+              <h3
+                key={pIdx}
+                className="font-bold text-emerald-400 text-lg mt-3"
+                dangerouslySetInnerHTML={{
+                  __html: formatInlineRichText(paragraph.replace(/^#{1,2}\s+/, ''), false),
+                }}
+              />
+            );
+          }
+
+          // 4. 分隔線
+          if (paragraph === '---' || paragraph === '***') {
+            return <hr key={pIdx} className="border-slate-800 my-2" />;
+          }
+
+          // 5. Markdown 表格
+          const lines = paragraph.split('\n');
+          if (lines.length >= 2 && lines[0].includes('|') && lines[1].includes('---')) {
+            const headerCells = lines[0]
+              .split('|')
+              .map((c) => c.trim())
+              .filter(Boolean);
+            const bodyRows = lines.slice(2).map((r) =>
+              r
+                .split('|')
+                .map((c) => c.trim())
+                .filter(Boolean)
+            );
+            return (
+              <div key={pIdx} className="overflow-x-auto my-2 rounded-xl border border-slate-800">
+                <table className="w-full text-left text-xs text-slate-200">
+                  <thead className="bg-slate-950 text-emerald-300 border-b border-slate-800">
+                    <tr>
+                      {headerCells.map((hc, hIdx) => (
+                        <th
+                          key={hIdx}
+                          className="px-3 py-2 font-semibold"
+                          dangerouslySetInnerHTML={{ __html: formatInlineRichText(hc, false) }}
+                        />
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 bg-slate-900/50">
+                    {bodyRows.map((row, rIdx) => (
+                      <tr key={rIdx}>
+                        {row.map((cell, cIdx) => (
+                          <td
+                            key={cIdx}
+                            className="px-3 py-2"
+                            dangerouslySetInnerHTML={{ __html: formatInlineRichText(cell, false) }}
+                          />
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          }
+
+          // 6. 條列清單 (無序 - / * 或 有序 1. 2.)
+          const isListBlock = lines.every(
+            (l) =>
+              /^\s*[-*•]\s+/.test(l) ||
+              /^\s*\d+\.\s+/.test(l) ||
+              l.trim() === ''
+          );
+          if (isListBlock) {
+            const nonEmptyLines = lines.filter((l) => l.trim().length > 0);
+            const isOrdered = /^\s*\d+\.\s+/.test(nonEmptyLines[0] || '');
+            const ListTag = isOrdered ? 'ol' : 'ul';
+            return (
+              <ListTag
+                key={pIdx}
+                className={`${
+                  isOrdered ? 'list-decimal' : 'list-disc'
+                } list-inside space-y-1.5 pl-1 text-slate-200`}
+              >
+                {nonEmptyLines.map((it, itIdx) => {
+                  const cleanedItem = it
+                    .replace(/^\s*[-*•]\s+/, '')
+                    .replace(/^\s*\d+\.\s+/, '');
+                  return (
+                    <li key={itIdx} className="leading-relaxed">
+                      <span
+                        dangerouslySetInnerHTML={{
+                          __html: formatInlineRichText(cleanedItem, false),
+                        }}
+                      />
+                    </li>
+                  );
+                })}
+              </ListTag>
+            );
+          }
+
+          // 7. 一般段落（支援段內多行換行與混合清單）
           return (
-            <p
-              key={pIdx}
-              dangerouslySetInnerHTML={{
-                __html: paragraph
-                  .replace(/\*\*(.*?)\*\*/g, '<strong class="text-emerald-300 font-semibold">$1</strong>')
-                  .replace(/`([^`]+)`/g, '<code class="bg-slate-800 px-1.5 py-0.5 rounded text-teal-300 text-xs font-mono">$1</code>'),
-              }}
-            />
+            <div key={pIdx} className="space-y-1">
+              {lines.map((line, lIdx) => {
+                const trimmedLine = line.trim();
+                if (!trimmedLine) return null;
+                if (/^[-*•]\s+/.test(trimmedLine)) {
+                  return (
+                    <div key={lIdx} className="flex items-start space-x-2 pl-2">
+                      <span className="text-emerald-400 mt-0.5">•</span>
+                      <span
+                        className="flex-1"
+                        dangerouslySetInnerHTML={{
+                          __html: formatInlineRichText(trimmedLine.replace(/^[-*•]\s+/, ''), false),
+                        }}
+                      />
+                    </div>
+                  );
+                }
+                return (
+                  <p
+                    key={lIdx}
+                    dangerouslySetInnerHTML={{
+                      __html: formatInlineRichText(line, false),
+                    }}
+                  />
+                );
+              })}
+            </div>
           );
         })}
       </div>
