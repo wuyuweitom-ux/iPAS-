@@ -107,8 +107,8 @@ def main():
             return
 
     client = genai.Client(api_key=api_key)
-    # 支援 gemini-2.5-flash / gemini-3.8-flash
-    model_name = "gemini-2.5-flash"
+    # 使用最新穩定版 gemini-3.8-flash
+    model_name = "gemini-3.8-flash"
 
     print_banner()
 

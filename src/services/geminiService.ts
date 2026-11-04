@@ -96,7 +96,7 @@ export async function streamGeminiChat(
   // 建立工具設定 (Google Search 僅在需要時掛載)
   const tools = enableSearch ? [{ googleSearch: {} }] : undefined;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   try {
     const response = await fetch(url, {

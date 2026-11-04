@@ -100,7 +100,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <div className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700 text-slate-300">
               <span className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-              <span>{hasApiKey ? 'Gemini 2.5 在線' : '離線知識庫'}</span>
+              <span>{hasApiKey ? 'Gemini 3.8 Flash' : '離線知識庫'}</span>
             </div>
           </div>
         </div>
