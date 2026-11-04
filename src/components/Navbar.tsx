@@ -1,15 +1,18 @@
 import React from 'react';
-import { 
-  Bot, 
-  BookOpen, 
-  HelpCircle, 
+import {
+  Bot,
+  BookOpen,
+  HelpCircle,
   Sparkles,
-  Key
+  Key,
+  Database,
 } from 'lucide-react';
 
+export type NavTab = 'chat' | 'rag' | 'exam' | 'guide';
+
 interface NavbarProps {
-  activeTab: 'chat' | 'exam' | 'guide';
-  setActiveTab: (tab: 'chat' | 'exam' | 'guide') => void;
+  activeTab: NavTab;
+  setActiveTab: (tab: NavTab) => void;
   hasApiKey: boolean;
   onOpenApiKeyModal: () => void;
 }
@@ -18,7 +21,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   setActiveTab,
   hasApiKey,
-  onOpenApiKeyModal
+  onOpenApiKeyModal,
 }) => {
   return (
     <header className="bg-slate-900 border-b border-emerald-800/40 sticky top-0 z-40 backdrop-blur-md bg-opacity-95 text-white">
@@ -32,13 +35,15 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <span className="font-bold text-lg text-emerald-400 tracking-tight">iPAS</span>
-                <span className="font-semibold text-slate-100 text-sm sm:text-base">淨零碳規劃師 備考助教</span>
+                <span className="font-semibold text-slate-100 text-sm sm:text-base">
+                  淨零碳規劃師 備考助教
+                </span>
                 <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-950 text-emerald-300 border border-emerald-700/50">
-                  備考專用
+                  RAG 增強版
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                啟發式提示 • ISO 14064-1/14067 • 氣候變遷因應法 • 歷屆題庫
+                RAG 教材與考古題優先引用 • 自動聯網查證 • ISO 14064-1/14067
               </p>
             </div>
           </div>
@@ -55,6 +60,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Bot className="w-4 h-4 text-emerald-400" />
               <span>AI 備考助教</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('rag')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
+                activeTab === 'rag'
+                  ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <Database className="w-4 h-4 text-amber-400" />
+              <span>RAG 教材與題庫庫</span>
             </button>
 
             <button
@@ -99,8 +116,12 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
 
             <div className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700 text-slate-300">
-              <span className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-              <span>{hasApiKey ? 'Gemini 3.8 Flash' : '離線知識庫'}</span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  hasApiKey ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                }`}
+              />
+              <span>{hasApiKey ? 'RAG + Gemini 連線' : 'RAG 離線檢索'}</span>
             </div>
           </div>
         </div>
@@ -110,16 +131,31 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => setActiveTab('chat')}
             className={`flex items-center space-x-1 px-3 py-1.5 rounded-md whitespace-nowrap cursor-pointer ${
-              activeTab === 'chat' ? 'bg-emerald-600/30 text-emerald-300 font-semibold' : 'text-slate-400'
+              activeTab === 'chat'
+                ? 'bg-emerald-600/30 text-emerald-300 font-semibold'
+                : 'text-slate-400'
             }`}
           >
             <Bot className="w-3.5 h-3.5" />
             <span>AI 助教</span>
           </button>
           <button
+            onClick={() => setActiveTab('rag')}
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-md whitespace-nowrap cursor-pointer ${
+              activeTab === 'rag'
+                ? 'bg-emerald-600/30 text-emerald-300 font-semibold'
+                : 'text-slate-400'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5 text-amber-400" />
+            <span>RAG 教材庫</span>
+          </button>
+          <button
             onClick={() => setActiveTab('exam')}
             className={`flex items-center space-x-1 px-3 py-1.5 rounded-md whitespace-nowrap cursor-pointer ${
-              activeTab === 'exam' ? 'bg-emerald-600/30 text-emerald-300 font-semibold' : 'text-slate-400'
+              activeTab === 'exam'
+                ? 'bg-emerald-600/30 text-emerald-300 font-semibold'
+                : 'text-slate-400'
             }`}
           >
             <HelpCircle className="w-3.5 h-3.5" />
@@ -128,7 +164,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => setActiveTab('guide')}
             className={`flex items-center space-x-1 px-3 py-1.5 rounded-md whitespace-nowrap cursor-pointer ${
-              activeTab === 'guide' ? 'bg-emerald-600/30 text-emerald-300 font-semibold' : 'text-slate-400'
+              activeTab === 'guide'
+                ? 'bg-emerald-600/30 text-emerald-300 font-semibold'
+                : 'text-slate-400'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />

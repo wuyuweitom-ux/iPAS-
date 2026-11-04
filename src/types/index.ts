@@ -1,9 +1,22 @@
+export type RagDocCategory = '公版教材' | '歷年考古題' | '法規標準' | '自訂講義';
+
+export interface RagCitation {
+  chunkId?: string;
+  docName: string;
+  category: RagDocCategory;
+  pageOrSection: string;
+  snippet: string;
+  score: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
   groundingUrls?: Array<{ uri: string; title?: string }>;
+  ragCitations?: RagCitation[];
+  sourceMode?: 'rag' | 'rag+web' | 'web' | 'offline';
   isHint?: boolean;
 }
 
@@ -36,4 +49,29 @@ export interface StudyNote {
   tableHeaders?: string[];
   tableRows?: string[][];
   examTrapNotice?: string;
+}
+
+export interface RagChunk {
+  id: string;
+  docId: string;
+  docName: string;
+  category: RagDocCategory;
+  pageOrSection: string;
+  content: string;
+}
+
+export interface RagDocument {
+  id: string;
+  name: string;
+  category: RagDocCategory;
+  createdAt: string;
+  chunkCount: number;
+  charCount: number;
+  isBuiltIn?: boolean;
+}
+
+export interface RagSearchResult {
+  chunk: RagChunk;
+  score: number;
+  matchedTerms: string[];
 }

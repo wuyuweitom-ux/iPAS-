@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Navbar } from './components/Navbar';
+import { Navbar, NavTab } from './components/Navbar';
 import { ChatTutor } from './components/ChatTutor';
+import { RagKnowledgeBase } from './components/RagKnowledgeBase';
 import { QuestionBank } from './components/QuestionBank';
 import { StudyGuide } from './components/StudyGuide';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -13,7 +14,7 @@ import { hasApiKey } from './services/geminiService';
 import { ShieldCheck } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'exam' | 'guide'>('chat');
+  const [activeTab, setActiveTab] = useState<NavTab>('chat');
   const [pendingPromptForChat, setPendingPromptForChat] = useState<string>('');
   const [isKeyConfigured, setIsKeyConfigured] = useState<boolean>(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
@@ -48,7 +49,12 @@ export default function App() {
             initialPrompt={pendingPromptForChat}
             onClearInitialPrompt={() => setPendingPromptForChat('')}
             onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+            onOpenRagTab={() => setActiveTab('rag')}
           />
+        )}
+
+        {activeTab === 'rag' && (
+          <RagKnowledgeBase onAskTutorWithQuestion={handleAskTutorWithQuestion} />
         )}
 
         {activeTab === 'exam' && (
@@ -72,12 +78,14 @@ export default function App() {
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-slate-300 font-medium">iPAS 淨零碳規劃師備考系統</span>
             <span className="text-slate-500">|</span>
-            <span className="text-slate-400">ISO 14064-1 • ISO 14067 • 氣候變遷因應法</span>
+            <span className="text-slate-400">
+              RAG 教材與考古題優先檢索 • 自動聯網查證 • ISO 14064-1 / 14067
+            </span>
           </div>
 
           <div className="flex items-center space-x-2 text-[11px] text-slate-400">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span>純靜態 Zero-Leak 架構：金鑰僅存於個人本機瀏覽器，原始碼零外洩風險</span>
+            <span>純靜態 Zero-Leak 架構：金鑰與 RAG 教材僅存於個人本機瀏覽器，原始碼零外洩風險</span>
           </div>
         </div>
       </footer>

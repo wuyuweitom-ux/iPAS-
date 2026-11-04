@@ -1,28 +1,31 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Send, 
-  Sparkles, 
-  Bot, 
-  User, 
-  Lightbulb, 
-  Compass, 
-  Scale, 
-  Calculator, 
-  Globe, 
-  Copy, 
-  Check, 
-  RotateCcw, 
-  Volume2, 
-  VolumeX, 
-  Download, 
+import {
+  Send,
+  Sparkles,
+  Bot,
+  User,
+  Lightbulb,
+  Compass,
+  Scale,
+  Calculator,
+  Globe,
+  Copy,
+  Check,
+  RotateCcw,
+  Volume2,
+  VolumeX,
   ExternalLink,
-  ChevronRight,
   Key,
-  ShieldCheck,
-  FileText
+  FileText,
+  Database,
+  BookOpen,
+  ChevronDown,
+  ChevronUp,
+  Upload,
 } from 'lucide-react';
 import { ChatMessage, TutorMode } from '../types';
 import { streamGeminiChat, hasApiKey } from '../services/geminiService';
+import { getAllRagDocuments, uploadFileToRag } from '../services/ragService';
 import { exportNotesToPdf } from '../utils/pdfExport';
 import {
   formatInlineRichText,
@@ -35,24 +38,25 @@ interface ChatTutorProps {
   initialPrompt?: string;
   onClearInitialPrompt?: () => void;
   onOpenApiKeyModal?: () => void;
+  onOpenRagTab?: () => void;
 }
 
 export const ChatTutor: React.FC<ChatTutorProps> = ({
   initialPrompt,
   onClearInitialPrompt,
   onOpenApiKeyModal,
+  onOpenRagTab,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome-1',
       role: 'assistant',
-      content: `你好！我是你的 **iPAS 淨零碳規劃師** AI 備考助教。🌱
+      content: `你好！我是你的 **iPAS 淨零碳規劃師** AI 備考助教（已搭載 **RAG 教材與考古題優先檢索系統**）。🌱
 
-在備考過程中，當你遇到考古題或計算難題時：
-- 💡 **我不會直接告訴你答案選項**，而是先給予觀念提示、解題思維脈絡與關鍵字，引導你自主判斷。
-- 🎯 若遇到觀念盲點，我會直接為你診斷並精準引證 **ISO 14064-1**、**ISO 14067**、**GHG Protocol** 或台灣《氣候變遷因應法》條款。
-
-你可以隨時貼上一題考古題、請我進行觀念測驗，或直接點選下方的推薦練習主題！`,
+在每次對答中，我的檢索與教學邏輯如下：
+1. 📚 **第一優先：檢索並引用 RAG 知識庫**：我會先從本地「公版教材與歷年考古題庫」檢索最相關的章節與考題。你可以點擊上方 **「📚 RAG 知識庫 / 快速上傳」** 匯入你的 PDF 教材或考古題。
+2. 🌐 **第二順位：自動聯網搜尋備援**：若你的提問在 RAG 知識庫中沒有直接匹配的內容，我會**自動啟動 Google Search 上網查證**最新環境部法規或國際標準。
+3. 💡 **蘇格拉底啟發引導**：面對考古題時，我會先給你法規條款提示與解題關鍵字，引導你自主判斷！`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -65,9 +69,26 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [pdfProgress, setPdfProgress] = useState('');
+  const [expandedCitationMsgIds, setExpandedCitationMsgIds] = useState<Record<string, boolean>>({});
+  const [ragDocCount, setRagDocCount] = useState<number>(0);
+  const [quickUploadToast, setQuickUploadToast] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const quickFileInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshRagCount = async () => {
+    try {
+      const docs = await getAllRagDocuments();
+      setRagDocCount(docs.length);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    refreshRagCount();
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -85,33 +106,61 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
     }
   }, [initialPrompt, onClearInitialPrompt]);
 
-  const quickPrompts = [
-    { label: '💡 考我一題 ISO 14064-1 類別分類', prompt: '請出 1 道 ISO 14064-1:2018 類別分類（類別 1 至 類別 6）的單選模擬題，列出選項，但暫時不要公布答案，請等待我的作答。' },
-    { label: '⚖️ 生質能 CO2 排放如何報告？', prompt: '請問在 ISO 14064-1 與溫室氣體盤查議定書中，燃燒生質燃料產生的 CO2 應該如何報告？為什麼不能直接與化石排放合併？' },
-    { label: '🔍 範疇二地點法 vs 市場法', prompt: '請幫我剖析範疇二 (Scope 2) 的「地點基礎法 (Location-based)」與「市場基礎法 (Market-based)」之核心觀念與常考陷阱。' },
-    { label: '🧮 逸散排放與 GWP 計算引導', prompt: '請引導我練習一題「冷媒設備維修逸散」的排放量計算題，請先給予計算步驟與公式提示，讓我試算。' },
-    { label: '📜 台灣碳費三子法重點', prompt: '請列舉台灣環境部公布之碳費收費辦法與自主減量計畫的核心要點，包括一般費率、優惠費率與碳洩漏風險產業規定。' },
-  ];
-
-  const getSystemPromptByMode = (m: TutorMode): string => {
-    const base = `你是一位專業且權威的 iPAS 淨零碳規劃師備考助教。請針對考生提問進行專業引導與答覆。`;
-    switch (m) {
-      case 'socratic':
-        return `${base}
-【蘇格拉底啟發模式】：遇到選擇題或考題提問時，絕對不要直接說出正確答案選項（如「答案是 B」）。請先提供關鍵解題概念、法規思考方向、排除錯誤選項的邏輯線索，引導考生自行推導得出答案。`;
-      case 'diagnostic':
-        return `${base}
-【盲點診斷模式】：請針對考生最容易搞混的觀念（如：組織邊界股權比例 vs 營運控制、類別三運輸 vs 類別四採購原料、範疇二市場基礎法憑證認定）進行對比分析，直擊認知盲區並指出常見出題陷阱。`;
-      case 'standards':
-        return `${base}
-【國際法規引證模式】：所有解題與觀念說明必須明確引用具體國際標準章節條款，包括：ISO 14064-1:2018、ISO 14067:2018、GHG Protocol Corporate Standard、台灣《氣候變遷因應法》條款與歐盟 CBAM 規則。`;
-      case 'calculation':
-        return `${base}
-【排放量計算引導模式】：引導考生進行溫室氣體量化計算（E = AD × EF × GWP），詳細拆解活動數據單位轉換、排放係數選擇與 GWP (AR5/AR6) 乘數步驟，確保計算精確度。`;
-      default:
-        return base;
+  const handleQuickFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    try {
+      const file = files[0];
+      setQuickUploadToast(`正在解析並匯入「${file.name}」至 RAG 知識庫...`);
+      const isExam =
+        file.name.includes('題') ||
+        file.name.toLowerCase().includes('exam') ||
+        file.name.toLowerCase().includes('quiz');
+      const doc = await uploadFileToRag(
+        file,
+        isExam ? '歷年考古題' : '公版教材',
+        (status: string) => setQuickUploadToast(status)
+      );
+      await refreshRagCount();
+      setQuickUploadToast(
+        `✅ 已成功將「${doc.name}」（共 ${doc.chunkCount} 段）加入 RAG 知識庫！現在可直接針對該教材提問。`
+      );
+      setTimeout(() => setQuickUploadToast(''), 5000);
+    } catch (err: unknown) {
+      const error = err as Error;
+      setQuickUploadToast(`⚠️ 上傳失敗：${error.message}`);
+      setTimeout(() => setQuickUploadToast(''), 5000);
+    } finally {
+      if (quickFileInputRef.current) quickFileInputRef.current.value = '';
     }
   };
+
+  const quickPrompts = [
+    {
+      label: '💡 考我一題 ISO 14064-1 類別分類',
+      prompt:
+        '請出 1 道 ISO 14064-1:2018 類別分類（類別 1 至 類別 6）的單選模擬題，列出選項，但暫時不要公布答案，請等待我的作答。',
+    },
+    {
+      label: '⚖️ 生質能 CO2 排放如何報告？',
+      prompt:
+        '請問在 ISO 14064-1 與溫室氣體盤查議定書中，燃燒生質燃料產生的 CO2 應該如何報告？為什麼不能直接與化石排放合併？',
+    },
+    {
+      label: '🔍 範疇二地點法 vs 市場法',
+      prompt:
+        '請幫我剖析範疇二 (Scope 2) 的「地點基礎法 (Location-based)」與「市場基礎法 (Market-based)」之核心觀念與常考陷阱。',
+    },
+    {
+      label: '🧮 逸散排放與 GWP 計算引導',
+      prompt:
+        '請引導我練習一題「冷媒設備維修逸散」的排放量計算題，請先給予計算步驟與公式提示，讓我試算。',
+    },
+    {
+      label: '📜 台灣碳費三子法重點',
+      prompt:
+        '請列舉台灣環境部公布之碳費收費辦法與自主減量計畫的核心要點，包括一般費率、優惠費率與碳洩漏風險產業規定。',
+    },
+  ];
 
   const handleSendMessage = async (textToSend?: string) => {
     const userText = textToSend || input.trim();
@@ -155,6 +204,20 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
               )
             );
           },
+          onMetadata: (meta) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      ragCitations: meta.ragCitations,
+                      groundingUrls: meta.groundingUrls,
+                      sourceMode: meta.sourceMode,
+                    }
+                  : m
+              )
+            );
+          },
           onDone: () => {
             setIsLoading(false);
           },
@@ -165,8 +228,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                   ? {
                       ...m,
                       content:
-                        accumulatedContent +
-                        `\n\n⚠️ **提示**：${err.message}`,
+                        accumulatedContent + `\n\n⚠️ **提示**：${err.message}`,
                     }
                   : m
               )
@@ -222,7 +284,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         {
           id: 'welcome-reset',
           role: 'assistant',
-          content: '對話已重置。請隨時向我提出考題或淨零碳標準疑問！🌱',
+          content: '對話已重置。對答將優先檢索並引用您的 RAG 教材與歷年考古題庫，若無匹配則自動聯網查證！🌱',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -245,6 +307,13 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
       setIsExportingPdf(false);
       setPdfProgress('');
     }
+  };
+
+  const toggleCitationExpand = (msgId: string) => {
+    setExpandedCitationMsgIds((prev) => ({
+      ...prev,
+      [msgId]: !prev[msgId],
+    }));
   };
 
   // Render markdown, chemical formulas (CO₂, CH₄...), and LaTeX calculation formulas cleanly
@@ -371,7 +440,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             );
           }
 
-          // 6. 條列清單 (無序 - / * 或 有序 1. 2.)
+          // 6. 條列清單
           const isListBlock = lines.every(
             (l) =>
               /^\s*[-*•]\s+/.test(l) ||
@@ -407,7 +476,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             );
           }
 
-          // 7. 一般段落（支援段內多行換行與混合清單）
+          // 7. 一般段落
           return (
             <div key={pIdx} className="space-y-1">
               {lines.map((line, lIdx) => {
@@ -444,6 +513,19 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] max-w-6xl mx-auto px-2 sm:px-4 py-4">
+      {/* Quick Upload Status Toast */}
+      {quickUploadToast && (
+        <div className="mb-2 px-3 py-2 rounded-xl bg-emerald-950/90 border border-emerald-600/60 text-emerald-200 text-xs flex items-center justify-between shadow-md">
+          <span>{quickUploadToast}</span>
+          <button
+            onClick={() => setQuickUploadToast('')}
+            className="text-emerald-400 hover:text-white ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Top Controller Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 mb-3 shadow-md flex flex-wrap items-center justify-between gap-2">
         {/* Mode Selector */}
@@ -451,7 +533,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
           <span className="text-xs text-slate-400 font-medium hidden sm:inline">助教模式:</span>
           <button
             onClick={() => setMode('socratic')}
-            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
               mode === 'socratic'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-300 hover:bg-slate-800'
@@ -463,7 +545,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
 
           <button
             onClick={() => setMode('diagnostic')}
-            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
               mode === 'diagnostic'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-300 hover:bg-slate-800'
@@ -475,7 +557,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
 
           <button
             onClick={() => setMode('standards')}
-            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
               mode === 'standards'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-300 hover:bg-slate-800'
@@ -487,7 +569,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
 
           <button
             onClick={() => setMode('calculation')}
-            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
               mode === 'calculation'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-300 hover:bg-slate-800'
@@ -499,19 +581,50 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         </div>
 
         {/* Tools and Actions */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1.5 sm:space-x-2 flex-wrap gap-y-1">
+          {/* Hidden quick file upload input */}
+          <input
+            ref={quickFileInputRef}
+            type="file"
+            accept=".pdf,.txt,.md,.csv,.json"
+            onChange={(e) => handleQuickFileUpload(e.target.files)}
+            className="hidden"
+          />
+
+          {/* Quick Upload File to RAG Button */}
+          <button
+            onClick={() => quickFileInputRef.current?.click()}
+            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-700/60 text-emerald-300 transition-all cursor-pointer"
+            title="快速上傳歷年考古題或公版教材 (PDF/TXT/CSV)"
+          >
+            <Upload className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">上傳教材/題庫</span>
+          </button>
+
+          {/* Open RAG Knowledge Base Manager */}
+          {onOpenRagTab && (
+            <button
+              onClick={onOpenRagTab}
+              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 transition-all cursor-pointer"
+              title="管理 RAG 歷年考古題與公版教材知識庫"
+            >
+              <Database className="w-3.5 h-3.5 text-emerald-400" />
+              <span>RAG 庫 ({ragDocCount})</span>
+            </button>
+          )}
+
           {/* Google Search Toggle */}
           <button
             onClick={() => setEnableSearch(!enableSearch)}
-            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border cursor-pointer ${
               enableSearch
                 ? 'bg-teal-950/80 border-teal-500 text-teal-300 shadow-sm'
                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-300'
             }`}
-            title="啟用 Google Search 聯網接地查證最新公告與法規"
+            title="預設優先檢索 RAG，若無匹配會自動聯網。開啟此項則強制每次皆同步聯網查證"
           >
             <Globe className="w-3.5 h-3.5" />
-            <span>聯網查證</span>
+            <span className="hidden sm:inline">強制聯網</span>
             <span
               className={`w-2 h-2 rounded-full ml-1 ${
                 enableSearch ? 'bg-teal-400 animate-pulse' : 'bg-slate-600'
@@ -528,11 +641,10 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                   ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/60'
                   : 'bg-amber-950/60 border-amber-700/50 text-amber-300 hover:bg-amber-900/60'
               }`}
-              title={hasApiKey() ? '已儲存個人 Gemini Key (點擊管理或更換)' : '目前為離線模式 (點擊設定 Key)'}
+              title={hasApiKey() ? '已儲存個人 Gemini Key' : '點擊設定 Gemini Key'}
             >
               <Key className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{hasApiKey() ? 'API Key 已配置' : '設定 Key'}</span>
-              <span className="sm:hidden">{hasApiKey() ? 'Key' : 'Key'}</span>
+              <span className="hidden md:inline">{hasApiKey() ? 'Key 已設' : '設定 Key'}</span>
             </button>
           )}
 
@@ -554,19 +666,17 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             ) : (
               <>
                 <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden sm:inline">匯出 PDF 筆記</span>
-                <span className="sm:hidden">PDF</span>
+                <span className="hidden sm:inline">匯出 PDF</span>
               </>
             )}
           </button>
 
           <button
             onClick={handleClearChat}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-slate-800 text-xs flex items-center space-x-1 transition-all"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-slate-800 text-xs flex items-center space-x-1 transition-all cursor-pointer"
             title="清空對話"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">清空</span>
           </button>
         </div>
       </div>
@@ -575,10 +685,15 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
       <div className="flex-1 overflow-y-auto space-y-4 px-1 pb-4">
         {messages.map((m) => {
           const isUser = m.role === 'user';
+          const hasRagCitations = Boolean(m.ragCitations && m.ragCitations.length > 0);
+          const isCitationExpanded = Boolean(expandedCitationMsgIds[m.id]);
+
           return (
             <div
               key={m.id}
-              className={`flex items-start space-x-3 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}
+              className={`flex items-start space-x-3 ${
+                isUser ? 'flex-row-reverse space-x-reverse' : ''
+              }`}
             >
               <div
                 className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-md ${
@@ -597,17 +712,46 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                     : 'bg-slate-900 border border-emerald-900/40 rounded-tl-none'
                 }`}
               >
-                <div className="flex items-center justify-between gap-2 mb-1 border-b border-slate-700/30 pb-1">
-                  <span className="text-xs font-medium text-emerald-400">
-                    {isUser ? '你 (考生)' : 'iPAS AI 備考助教'}
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5 border-b border-slate-700/30 pb-1.5">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-medium text-emerald-400">
+                      {isUser ? '你 (考生)' : 'iPAS AI 備考助教'}
+                    </span>
+
+                    {/* Source Pipeline Badge */}
+                    {!isUser && m.sourceMode && (
+                      <span
+                        className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                          hasRagCitations
+                            ? 'bg-emerald-950/90 border-emerald-700/60 text-emerald-300'
+                            : 'bg-teal-950/90 border-teal-700/60 text-teal-300'
+                        }`}
+                      >
+                        {hasRagCitations ? (
+                          <>
+                            <BookOpen className="w-2.5 h-2.5" />
+                            <span>
+                              優先引用 RAG 知識庫 ({m.ragCitations?.length} 段)
+                              {m.sourceMode === 'rag+web' ? ' + 聯網補充' : ''}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Globe className="w-2.5 h-2.5" />
+                            <span>RAG 無直接匹配・已自動聯網搜尋</span>
+                          </>
+                        )}
+                      </span>
+                    )}
+                  </div>
+
                   <div className="flex items-center space-x-2 text-[10px] text-slate-400">
                     <span>{m.timestamp}</span>
                     {!isUser && (
                       <>
                         <button
                           onClick={() => handleCopy(m.id, m.content)}
-                          className="hover:text-emerald-300 transition-colors"
+                          className="hover:text-emerald-300 transition-colors cursor-pointer"
                           title="複製內容"
                         >
                           {copiedId === m.id ? (
@@ -618,7 +762,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                         </button>
                         <button
                           onClick={() => handleSpeak(m.id, m.content)}
-                          className="hover:text-emerald-300 transition-colors"
+                          className="hover:text-emerald-300 transition-colors cursor-pointer"
                           title="語音朗讀"
                         >
                           {speakingId === m.id ? (
@@ -638,12 +782,63 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                   <div>{renderFormattedContent(m.content)}</div>
                 )}
 
-                {/* Grounding references if present */}
+                {/* RAG Citations Expandable Drawer */}
+                {!isUser && hasRagCitations && (
+                  <div className="mt-3 pt-2.5 border-t border-slate-800/90 text-xs">
+                    <button
+                      onClick={() => toggleCitationExpand(m.id)}
+                      className="w-full flex items-center justify-between text-left px-2.5 py-1.5 rounded-lg bg-emerald-950/40 hover:bg-emerald-950/70 border border-emerald-800/40 text-emerald-300 transition-all cursor-pointer"
+                    >
+                      <span className="flex items-center space-x-1.5 font-medium">
+                        <Database className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>
+                          📚 本次回答優先引用的 RAG 教材與考古題依據 ({m.ragCitations?.length} 處)
+                        </span>
+                      </span>
+                      <span className="flex items-center space-x-1 text-[11px] text-emerald-400">
+                        <span>{isCitationExpanded ? '收合原文' : '展開檢視原文'}</span>
+                        {isCitationExpanded ? (
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        )}
+                      </span>
+                    </button>
+
+                    {isCitationExpanded && (
+                      <div className="mt-2 space-y-2 pl-1">
+                        {m.ragCitations?.map((cit, idx) => (
+                          <div
+                            key={cit.chunkId}
+                            className="bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 space-y-1"
+                          >
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-emerald-300">
+                                📖 [{idx + 1}] {cit.docName} — {cit.pageOrSection}
+                              </span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">
+                                檢索分數 {cit.score}
+                              </span>
+                            </div>
+                            <p
+                              className="text-[11px] text-slate-300 leading-relaxed"
+                              dangerouslySetInnerHTML={{
+                                __html: formatInlineRichText(cit.snippet, false),
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Web Search Grounding references if present */}
                 {m.groundingUrls && m.groundingUrls.length > 0 && (
                   <div className="mt-3 pt-2 border-t border-slate-800 text-xs">
                     <span className="text-teal-400 font-medium flex items-center space-x-1 mb-1">
                       <Globe className="w-3 h-3" />
-                      <span>參考來源 (Search Grounding):</span>
+                      <span>🌐 網路搜尋查證來源 (Google Search Grounding):</span>
                     </span>
                     <ul className="space-y-1">
                       {m.groundingUrls.map((link, idx) => (
@@ -670,7 +865,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         {isLoading && (
           <div className="flex items-center space-x-2 text-slate-400 text-xs pl-11">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>助教正在查閱官方教材與標準規範，組織解題思路...</span>
+            <span>助教正在優先檢索 RAG 歷年考古題與公版教材，若無匹配將自動聯網查證...</span>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -714,7 +909,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                 handleSendMessage();
               }
             }}
-            placeholder="貼上考古題、詢問 ISO 14064-1/14067 標準或請助教出題練習... (Enter 送出, Shift+Enter 換行)"
+            placeholder="貼上考古題或詢問考點（系統將優先引用 RAG 教材與考古題，若無則自動上網搜尋）... (Enter 送出)"
             className="flex-1 bg-transparent border-0 text-slate-100 placeholder-slate-500 text-sm focus:ring-0 resize-none p-1.5 focus:outline-none"
           />
 
