@@ -117,14 +117,20 @@ export async function fetchAvailableModelsForKey(apiKey: string): Promise<string
 }
 
 // 系統預設提示詞（精簡化以減少每輪 Prompt Tokens 消耗，防止觸發免費版 429 TPM 限額）
-const SYSTEM_INSTRUCTION = `你是一位專業的 iPAS 淨零碳規劃師備考助教。
-請協助考生準備經濟部能力鑑定（科目一：淨零碳法規；科目二：溫室氣體盤查與碳足跡）。
+// 系統預設提示詞：專業頂尖 iPAS 淨零碳備考助教 (100% 線上權威解答)
+const SYSTEM_INSTRUCTION = `你是一位專業的 iPAS 淨零碳規劃管理師（初級/中級能力鑑定）頂尖備考助教。
+請全程使用繁體中文，專業、親切且條列分明地協助考生掌握經濟部 iPAS 兩大核心考科：
+- 科目一：淨零碳規劃管理基礎概論（國內外淨零趨勢、氣候變遷因應法、碳費三子法、CBAM、碳權與自願減量專案、ESG 與 SBTi）。
+- 科目二：淨零碳盤查規範與程序概要（ISO 14064-1:2018 類別1~6、溫室氣體盤查議定書 GHG Protocol 範疇一至三、ISO 14067:2018 產品碳足跡生命週期評估、活動數據與排放係數、逸散量與 GWP 換算）。
 
-教學與回答守則：
-1. 【優先引用 RAG 教材】：系統提供本地 RAG 知識庫檢索結果時，請優先且明確引用教材與考古題內容作答，並標註如 \`📖 [引用自：文件名稱 - 頁碼/段落]\`。若 RAG 無直接匹配，再行聯網查證或引用官方標準。
-2. 【引導思考，不直接暴雷】：考生詢問考題時，切勿直接公布答案選項（如「答案是 B」）。請先提供關鍵觀念指引、法規思考脈絡或排除法提示，引導學生自行判斷。
-3. 【精準標準引證】：回答明確引用具體條款（ISO 14064-1:2018、ISO 14067:2018、ISO 14068-1:2023、GHG Protocol、台灣氣候變遷因應法、CBAM、SBTi）。
-4. 【語言與語氣】：使用繁體中文，專業清晰，條列分明。`;
+回答原則：
+1. 【考題互動與批改】：
+   - 當考生回覆作答（例如「我選 B」、「答案是不是 C」）時，立即為考生明確核對對錯，精闢解析正確選項的法規法條依據，並逐項剖析其餘干擾選項的錯誤陷阱！
+   - 當考生要求出題時，列出清晰的題目題幹、四個選項 (A)(B)(C)(D)，並引導考生作答。
+2. 【計算題精準拆解】：
+   - 遇到溫室氣體排放量計算題，逐步條列活動數據 (AD)、排放係數 (EF) 與全球暖化潛勢 (GWP，如 IPCC AR4/AR5/AR6 值)，提醒單位換算（公噸/公斤）與公式細節。
+3. 【具體條款引證】：
+   - 答題詳述具體條款依據，如 ISO 14064-1:2018 第 5.2 條重大性間接排放、第 6.4.2 條基準年、範疇二地點基礎法與市場基礎法比較等。`;
 
 export interface ChatMessagePayload {
   role: 'user' | 'assistant' | 'system';
@@ -144,90 +150,39 @@ export interface StreamCallbacks {
   onError: (err: Error) => void;
 }
 
-export type ContextScope = 'single' | 'multi';
-
 /**
- * 清理並建構送往 Gemini API 的 Contents 結構：
- * - 'single' (單輪專注・防429，預設推薦)：
- *   只擷取前一題 Assistant 的題目重點 (核心 300 字) 與考生當前回答，打包為單一 User 提問。
- *   Token 總量從 2,500+ tokens 驟降至 200~350 tokens (節省近 90% Token)，徹底消除 TPM 爆量導致的 429 Rate Limit！
- * - 'multi' (多輪歷程)：
- *   保留最近 4 則對話並交替 role，同時對長篇助手回覆進行精簡。
+ * 建構送往 Gemini API 的標準 Contents 結構：
+ * - 支援多輪上下文互動 (例如考生回覆「B」時，能完整理解上一題題目並進行批改)
+ * - 嚴格維護 user -> model -> user 交替格式
+ * - 對過往長篇回覆進行溫和精簡，防止 TPM (Tokens Per Minute) 爆量
  */
-function buildValidGeminiContents(
-  messages: ChatMessagePayload[],
-  contextScope: ContextScope = 'single'
-) {
+function buildValidGeminiContents(messages: ChatMessagePayload[]) {
   const cleaned = messages.filter(
     (m) =>
       m.content &&
       m.content.trim().length > 0 &&
       !m.content.includes('⚠️ **提示**') &&
       !m.content.includes('發生錯誤：') &&
-      !m.content.includes('💡 **【系統提示：Google API 目前處於短暫每分鐘頻率尖峰')
+      !m.content.includes('Google 官方 API 頻率限制') &&
+      !m.content.includes('【系統提示：模型')
   );
 
   if (cleaned.length === 0) return [];
 
-  const latestUser = cleaned[cleaned.length - 1];
-
-  // 模式一：單輪專注（只拿上一題/問句進行討論，極致省 Token）
-  if (contextScope === 'single') {
-    let lastAssistantPrompt = '';
-
-    // 往前回溯找到最近的一則 AI 助手出的題目或說明
-    for (let i = cleaned.length - 2; i >= 0; i--) {
-      if (cleaned[i].role === 'assistant') {
-        const text = cleaned[i].content.trim();
-        // 排除純歡迎詞
-        if (!text.includes('對話已重置') && text.length > 8) {
-          lastAssistantPrompt = text;
-          break;
-        }
-      }
-    }
-
-    if (lastAssistantPrompt) {
-      // 擷取題目核心重點 (最多 350 字，足以包含題幹與選項 ABCD)
-      const trimmedAssistant =
-        lastAssistantPrompt.length > 350
-          ? lastAssistantPrompt.slice(0, 350) + '... (已精簡題幹以保證傳輸速度)'
-          : lastAssistantPrompt;
-
-      return [
-        {
-          role: 'user' as const,
-          parts: [
-            {
-              text: `【前一題題目或背景】：\n${trimmedAssistant}\n\n【考生針對此題的回答/提問】：\n${latestUser.content.trim()}\n\n請根據前一題的背景與考生的回答進行解析、批改或觀念引導。`,
-            },
-          ],
-        },
-      ];
-    }
-
-    // 若無上一題（如第一句提問），直接發送該 User 問題
-    return [
-      {
-        role: 'user' as const,
-        parts: [{ text: latestUser.content.trim() }],
-      },
-    ];
-  }
-
-  // 模式二：多輪連續歷程 (保留最近 4 則對話)
   const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
 
   for (const m of cleaned) {
     const role: 'user' | 'model' = m.role === 'assistant' ? 'model' : 'user';
 
+    // 第一則必須為 user
     if (contents.length === 0 && role === 'model') {
       continue;
     }
 
     let textContent = m.content.trim();
-    if (role === 'model' && textContent.length > 450) {
-      textContent = textContent.slice(0, 400) + '... (已精簡以保護傳輸額度)';
+    // 助手歷史長文精簡，保留題幹與選項核心，保護 TPM 配額
+    if (role === 'model' && textContent.length > 1000) {
+      textContent = textContent.slice(0, 950) + '...';
     }
 
     if (contents.length > 0 && contents[contents.length - 1].role === role) {
@@ -240,7 +195,8 @@ function buildValidGeminiContents(
     }
   }
 
-  while (contents.length > 4) {
+  // 僅保留最近 6 則（最多 3 輪對答）
+  while (contents.length > 6) {
     contents.shift();
   }
   while (contents.length > 0 && contents[0].role !== 'user') {
@@ -355,60 +311,42 @@ async function executeModelStream(
  * 透過 Google 官方端點串流呼叫 Gemini API
  * 具備「優先檢索本地 RAG ➔ 防暴風式配額耗盡 ➔ 429 智能退避」機制
  */
+/**
+ * 透過 Google 官方端點串流呼叫 Gemini API (100% 線上權威對答)
+ */
 export async function streamGeminiChat(
   messages: ChatMessagePayload[],
   mode: TutorMode,
   enableSearch: boolean,
-  callbacks: StreamCallbacks,
-  contextScope: ContextScope = 'single'
+  callbacks: StreamCallbacks
 ): Promise<void> {
-  const latestUserQuery = messages[messages.length - 1]?.content || '';
-
-  // 第一階段：優先檢索本地 RAG 知識庫（最多取 3 段，保持 Prompt 輕量，預防 TPM 爆額）
-  const ragData = await retrieveRagContext(latestUserQuery, 3);
-
   const apiKey = getStoredApiKey();
 
-  // 若尚未設定 API Key，使用內建離線知識庫引擎並附上 RAG 檢索結果
+  // 若尚未設定 API Key，明確提示用戶輸入
   if (!apiKey) {
-    simulateOfflineResponse(latestUserQuery, mode, ragData.citations, callbacks);
+    callbacks.onError(
+      new Error('尚未設定 Gemini API Key。請點擊右上角「設定 Key」填入您的免費 Google API Key，即可啟用 100% 線上 AI 備考助教即時互動對答！')
+    );
     return;
   }
 
-  const contents = buildValidGeminiContents(messages, contextScope);
+  const contents = buildValidGeminiContents(messages);
   if (contents.length === 0) {
-    callbacks.onError(new Error('請輸入有效的問題內容。'));
+    callbacks.onError(new Error('請輸入有效的問題或答案內容。'));
     return;
   }
 
-  const hasRag = ragData.hasRagMatch;
-  // 注意：若本地 RAG 已成功命中，預設不主動開啟額外的 Google Search 工具，節省額外的 Token 與延遲；僅在無 RAG 或使用者強制開啟時啟用
-  const shouldUseWebSearch = enableSearch || !hasRag;
-  const sourceMode: 'rag' | 'rag+web' | 'web' = hasRag
-    ? enableSearch
-      ? 'rag+web'
-      : 'rag'
-    : 'web';
-
-  let systemPrompt = getModeSystemPrompt(mode);
-  if (hasRag) {
-    systemPrompt += `\n\n${ragData.formattedPromptContext}\n請優先引用上述 RAG 教材內容回答，並標註如 📖 [引用自：文件名稱 - 頁碼/段落]。`;
-  } else {
-    systemPrompt += `\n\n【本地 RAG 未直接命中】：請運用官方規範與標準解答，並註明「🌐 (本地 RAG 無直接匹配，已啟動標準聯網查證)」。`;
-  }
-
+  const systemPrompt = getModeSystemPrompt(mode);
   let groundingUrls: Array<{ uri: string; title?: string }> = [];
 
   callbacks.onMetadata?.({
-    ragCitations: ragData.citations,
     groundingUrls: [],
-    sourceMode,
+    sourceMode: enableSearch ? 'web' : 'offline',
   });
 
   const userPreferredModel = getStoredModel();
   
-  // 嚴格單一模型策略：只挑選使用者指定的單一模型（預設使用 Google 官方最新穩定版 gemini-flash-latest）
-  // 絕不輪詢或連鎖重試其他模型，徹底消除多模型連鎖請求耗盡 RPM/TPM 限額的問題！
+  // 嚴格單一模型策略：預設使用 Google 官方最新穩定版 gemini-flash-latest
   const targetModel =
     userPreferredModel && userPreferredModel !== 'auto' && !userPreferredModel.includes('2.5-flash-lite')
       ? userPreferredModel
@@ -421,14 +359,13 @@ export async function streamGeminiChat(
       url,
       contents,
       systemPrompt,
-      shouldUseWebSearch,
+      enableSearch,
       callbacks.onChunk,
       (urls) => {
         groundingUrls = urls;
         callbacks.onMetadata?.({
-          ragCitations: ragData.citations,
           groundingUrls: urls,
-          sourceMode,
+          sourceMode: 'web',
         });
       }
     );
@@ -442,27 +379,45 @@ export async function streamGeminiChat(
         fallbackUrl,
         contents,
         systemPrompt,
-        shouldUseWebSearch,
+        enableSearch,
         callbacks.onChunk,
         (urls) => {
           groundingUrls = urls;
           callbacks.onMetadata?.({
-            ragCitations: ragData.citations,
             groundingUrls: urls,
-            sourceMode,
+            sourceMode: 'web',
           });
         }
       );
     }
 
-    // 若該模型因不支援 googleSearch 工具而回傳 400 (非 API Key 無效)，僅對同一模型以不帶 tools 重試一次
+    // 若該模型因不支援 googleSearch 工具而回傳 400，改以純文字串流重試一次
     if (
       !result.ok &&
       result.status === 400 &&
-      shouldUseWebSearch &&
+      enableSearch &&
       !result.errorMessage.includes('API_KEY_INVALID') &&
       !result.errorMessage.toLowerCase().includes('api key not valid')
     ) {
+      result = await executeModelStream(
+        url,
+        contents,
+        systemPrompt,
+        false,
+        callbacks.onChunk,
+        () => {}
+      );
+    }
+
+    // 若遭遇 429 頻率限制，短暫等待 2 秒自動在線上重試一次
+    if (
+      !result.ok &&
+      (result.status === 429 ||
+        result.errorMessage.includes('quota') ||
+        result.errorMessage.includes('RESOURCE_EXHAUSTED'))
+    ) {
+      console.warn(`[Gemini Rate Limit 429] 遇到頻率限制，等待 2 秒後在線上重試一次...`);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       result = await executeModelStream(
         url,
         contents,
@@ -498,11 +453,11 @@ export async function streamGeminiChat(
         result.errorMessage.includes('quota') ||
         result.errorMessage.includes('RESOURCE_EXHAUSTED')
       ) {
-        console.warn(`[Gemini Rate Limit] 模型 ${targetModel} 遭遇 429 頻率限制: ${result.errorMessage}`);
-        callbacks.onChunk(
-          `💡 **【系統提示：模型「${targetModel}」觸發每分鐘頻率限制 (429 Rate Limit)，已由本機 RAG 離線題庫與考點知識庫即時為您無縫解答，絕不耗費額外配額！】**\n\n`
+        callbacks.onError(
+          new Error(
+            '⚡ Google 官方 API 頻率限制 (429 Rate Limit)：您的提問頻率較快或對話長度超過每分鐘限額。請稍候 15~20 秒待 Google 每分鐘配額重置後，再次發送即可正常對答！'
+          )
         );
-        simulateOfflineResponse(latestUserQuery, mode, ragData.citations, callbacks);
         return;
       }
 
@@ -515,21 +470,17 @@ export async function streamGeminiChat(
 
     if (result.receivedAnyText) {
       callbacks.onMetadata?.({
-        ragCitations: ragData.citations,
         groundingUrls,
-        sourceMode,
+        sourceMode: enableSearch ? 'web' : 'offline',
       });
       callbacks.onDone();
       return;
     }
   } catch (err: unknown) {
     const error = err as Error;
-    callbacks.onError(new Error(`[${targetModel}] 連線發生例外：${error.message}`));
+    callbacks.onError(new Error(`[${targetModel}] 線上連線發生例外：${error.message}`));
     return;
   }
-
-  // 若仍無法完成，自動呼叫離線知識庫與 RAG 內容為考生作答，不中斷備考進度
-  simulateOfflineResponse(latestUserQuery, mode, ragData.citations, callbacks);
 }
 
 function getModeSystemPrompt(m: TutorMode): string {

@@ -21,13 +21,9 @@ import {
   BookOpen,
   ChevronDown,
   ChevronUp,
-  Upload,
-  Zap,
-  MessageSquare,
 } from 'lucide-react';
 import { ChatMessage, TutorMode } from '../types';
-import { streamGeminiChat, hasApiKey, ContextScope, getStoredModel } from '../services/geminiService';
-import { getAllRagDocuments, uploadFileToRag } from '../services/ragService';
+import { streamGeminiChat, hasApiKey, getStoredModel } from '../services/geminiService';
 import { exportNotesToPdf } from '../utils/pdfExport';
 import {
   formatInlineRichText,
@@ -47,18 +43,18 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
   initialPrompt,
   onClearInitialPrompt,
   onOpenApiKeyModal,
-  onOpenRagTab,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome-1',
       role: 'assistant',
-      content: `你好！我是你的 **iPAS 淨零碳規劃師** AI 備考助教（已搭載 **RAG 教材與考古題優先檢索系統**）。🌱
+      content: `你好！我是你的 **iPAS 淨零碳規劃管理師 100% 線上專屬 AI 備考助教**！🌱
 
-在每次對答中，我的檢索與教學邏輯如下：
-1. 📚 **第一優先：檢索並引用 RAG 知識庫**：我會先從本地「公版教材與歷年考古題庫」檢索最相關的章節與考題。你可以點擊上方 **「📚 RAG 知識庫 / 快速上傳」** 匯入你的 PDF 教材或考古題。
-2. 🌐 **第二順位：自動聯網搜尋備援**：若你的提問在 RAG 知識庫中沒有直接匹配的內容，我會**自動啟動 Google Search 上網查證**最新環境部法規或國際標準。
-3. 💡 **蘇格拉底啟發引導**：面對考古題時，我會先給你法規條款提示與解題關鍵字，引導你自主判斷！`,
+具備經濟部 iPAS 兩大考科的專業知識與解析引導：
+- 📘 **科目一**：淨零碳規劃管理基礎概論（國內外趨勢、氣候變遷因應法、碳費三子法、CBAM、ESG、SBTi）。
+- 📗 **科目二**：淨零碳盤查規範與程序概要（ISO 14064-1:2018 類別1~6、GHG Protocol 範疇一至三、ISO 14067、活動數據/排放係數計算）。
+
+你可以隨時貼上考題、詢問觀念或直接回答上一題的選項（如輸入「B」），我將全程以線上 AI 權威條款為你即時解析與批改！`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -67,31 +63,14 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<TutorMode>('socratic');
   const [enableSearch, setEnableSearch] = useState(false);
-  const [contextScope, setContextScope] = useState<ContextScope>('single');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [pdfProgress, setPdfProgress] = useState('');
   const [expandedCitationMsgIds, setExpandedCitationMsgIds] = useState<Record<string, boolean>>({});
-  const [ragDocCount, setRagDocCount] = useState<number>(0);
-  const [quickUploadToast, setQuickUploadToast] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const quickFileInputRef = useRef<HTMLInputElement>(null);
-
-  const refreshRagCount = async () => {
-    try {
-      const docs = await getAllRagDocuments();
-      setRagDocCount(docs.length);
-    } catch {
-      // ignore
-    }
-  };
-
-  useEffect(() => {
-    refreshRagCount();
-  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -108,34 +87,6 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
       inputRef.current?.focus();
     }
   }, [initialPrompt, onClearInitialPrompt]);
-
-  const handleQuickFileUpload = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    try {
-      const file = files[0];
-      setQuickUploadToast(`正在解析並匯入「${file.name}」至 RAG 知識庫...`);
-      const isExam =
-        file.name.includes('題') ||
-        file.name.toLowerCase().includes('exam') ||
-        file.name.toLowerCase().includes('quiz');
-      const doc = await uploadFileToRag(
-        file,
-        isExam ? '歷年考古題' : '公版教材',
-        (status: string) => setQuickUploadToast(status)
-      );
-      await refreshRagCount();
-      setQuickUploadToast(
-        `✅ 已成功將「${doc.name}」（共 ${doc.chunkCount} 段）加入 RAG 知識庫！現在可直接針對該教材提問。`
-      );
-      setTimeout(() => setQuickUploadToast(''), 5000);
-    } catch (err: unknown) {
-      const error = err as Error;
-      setQuickUploadToast(`⚠️ 上傳失敗：${error.message}`);
-      setTimeout(() => setQuickUploadToast(''), 5000);
-    } finally {
-      if (quickFileInputRef.current) quickFileInputRef.current.value = '';
-    }
-  };
 
   const quickPrompts = [
     {
@@ -238,8 +189,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             );
             setIsLoading(false);
           },
-        },
-        contextScope
+        }
       );
     } catch (err: unknown) {
       const error = err as Error;
@@ -288,7 +238,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         {
           id: 'welcome-reset',
           role: 'assistant',
-          content: '對話已重置。對答將優先檢索並引用您的 RAG 教材與歷年考古題庫，若無匹配則自動聯網查證！🌱',
+          content: '對話已重置。我是您的 100% 線上專屬 iPAS 淨零碳 AI 備考助教，隨時為您解答考點與批改考題！🌱',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -517,19 +467,6 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] max-w-6xl mx-auto px-2 sm:px-4 py-4">
-      {/* Quick Upload Status Toast */}
-      {quickUploadToast && (
-        <div className="mb-2 px-3 py-2 rounded-xl bg-emerald-950/90 border border-emerald-600/60 text-emerald-200 text-xs flex items-center justify-between shadow-md">
-          <span>{quickUploadToast}</span>
-          <button
-            onClick={() => setQuickUploadToast('')}
-            className="text-emerald-400 hover:text-white ml-2"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
       {/* Top Controller Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 mb-3 shadow-md flex flex-wrap items-center justify-between gap-2">
         {/* Mode Selector */}
@@ -586,37 +523,6 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
 
         {/* Tools and Actions */}
         <div className="flex items-center space-x-1.5 sm:space-x-2 flex-wrap gap-y-1">
-          {/* Hidden quick file upload input */}
-          <input
-            ref={quickFileInputRef}
-            type="file"
-            accept=".pdf,.txt,.md,.csv,.json"
-            onChange={(e) => handleQuickFileUpload(e.target.files)}
-            className="hidden"
-          />
-
-          {/* Quick Upload File to RAG Button */}
-          <button
-            onClick={() => quickFileInputRef.current?.click()}
-            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-700/60 text-emerald-300 transition-all cursor-pointer"
-            title="快速上傳歷年考古題或公版教材 (PDF/TXT/CSV)"
-          >
-            <Upload className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">上傳教材/題庫</span>
-          </button>
-
-          {/* Open RAG Knowledge Base Manager */}
-          {onOpenRagTab && (
-            <button
-              onClick={onOpenRagTab}
-              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 transition-all cursor-pointer"
-              title="管理 RAG 歷年考古題與公版教材知識庫"
-            >
-              <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span>RAG 庫 ({ragDocCount})</span>
-            </button>
-          )}
-
           {/* Google Search Toggle */}
           <button
             onClick={() => setEnableSearch(!enableSearch)}
@@ -625,44 +531,15 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                 ? 'bg-teal-950/80 border-teal-500 text-teal-300 shadow-sm'
                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-300'
             }`}
-            title="預設優先檢索 RAG，若無匹配會自動聯網。開啟此項則強制每次皆同步聯網查證"
+            title="開啟 Google Search Grounding 同步聯網查證最新環境部法規與國際標準"
           >
             <Globe className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">強制聯網</span>
+            <span className="hidden sm:inline">線上聯網查證</span>
             <span
               className={`w-2 h-2 rounded-full ml-1 ${
                 enableSearch ? 'bg-teal-400 animate-pulse' : 'bg-slate-600'
               }`}
             />
-          </button>
-
-          {/* Context Scope Toggle (防429單輪專注 vs 多輪歷程) */}
-          <button
-            onClick={() => setContextScope(contextScope === 'single' ? 'multi' : 'single')}
-            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border cursor-pointer ${
-              contextScope === 'single'
-                ? 'bg-emerald-950/90 border-emerald-500/80 text-emerald-300 shadow-sm'
-                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-slate-100'
-            }`}
-            title={
-              contextScope === 'single'
-                ? '⚡ 單輪專注模式：只保留前一題題目與本次作答，節省 85% Token，徹底杜絕 429 頻率限制 (推薦刷題互動使用)'
-                : '💬 多輪歷程模式：保留連續上下文，若對答長度過長可能觸發 Google 免費版每分鐘配額'
-            }
-          >
-            {contextScope === 'single' ? (
-              <>
-                <Zap className="w-3.5 h-3.5 text-yellow-400" />
-                <span className="hidden sm:inline">單輪專注 (防429)</span>
-                <span className="sm:hidden">單輪</span>
-              </>
-            ) : (
-              <>
-                <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden sm:inline">多輪歷程</span>
-                <span className="sm:hidden">多輪</span>
-              </>
-            )}
           </button>
 
           {/* API Key Status / Setting */}
@@ -906,7 +783,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         {isLoading && (
           <div className="flex items-center space-x-2 text-slate-400 text-xs pl-11">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>助教正在優先檢索 RAG 歷年考古題與公版教材，若無匹配將自動聯網查證...</span>
+            <span>AI 助教正在連線分析考點並生成專業解答...</span>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -930,32 +807,6 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
         ))}
       </div>
 
-      {/* Context Scope Indicator & Hint */}
-      <div className="flex items-center justify-between px-2 pb-1.5 text-[11px] text-slate-400">
-        <div className="flex items-center space-x-1.5">
-          {contextScope === 'single' ? (
-            <>
-              <Zap className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-              <span className="text-emerald-300 font-semibold">⚡ 單輪專注模式 (防429)：</span>
-              <span className="text-slate-400 hidden sm:inline">僅帶上一題背景與本次作答，省 85% Token，不觸發配額限制</span>
-            </>
-          ) : (
-            <>
-              <MessageSquare className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-              <span className="text-sky-300 font-semibold">💬 多輪歷程模式：</span>
-              <span className="text-slate-400 hidden sm:inline">保留完整對談上下文</span>
-            </>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => setContextScope(contextScope === 'single' ? 'multi' : 'single')}
-          className="text-xs text-slate-400 hover:text-emerald-300 underline underline-offset-2 transition-colors cursor-pointer"
-        >
-          {contextScope === 'single' ? '切換多輪歷程' : '切換單輪專注 (防429)'}
-        </button>
-      </div>
-
       {/* Input Form */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-2 shadow-lg focus-within:border-emerald-600 transition-all">
         <form
@@ -976,7 +827,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                 handleSendMessage();
               }
             }}
-            placeholder="貼上考古題或詢問考點（系統將優先引用 RAG 教材與考古題，若無則自動上網搜尋）... (Enter 送出)"
+            placeholder="貼上考題、詢問觀念或輸入選項答案（如 A、B、C、D）... (Enter 送出)"
             className="flex-1 bg-transparent border-0 text-slate-100 placeholder-slate-500 text-sm focus:ring-0 resize-none p-1.5 focus:outline-none"
           />
 

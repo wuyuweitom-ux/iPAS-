@@ -79,7 +79,7 @@ export default function App() {
             <span className="text-slate-300 font-medium">iPAS 淨零碳規劃師備考系統</span>
             <span className="text-slate-500">|</span>
             <span className="text-slate-400">
-              RAG 教材與考古題優先檢索 • 自動聯網查證 • ISO 14064-1 / 14067
+              100% 線上權威對答 • 官方標準即時解析 • ISO 14064-1 / 14067
             </span>
           </div>
 
