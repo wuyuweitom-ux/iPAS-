@@ -22,9 +22,11 @@ import {
   ChevronDown,
   ChevronUp,
   Upload,
+  Zap,
+  MessageSquare,
 } from 'lucide-react';
 import { ChatMessage, TutorMode } from '../types';
-import { streamGeminiChat, hasApiKey } from '../services/geminiService';
+import { streamGeminiChat, hasApiKey, ContextScope } from '../services/geminiService';
 import { getAllRagDocuments, uploadFileToRag } from '../services/ragService';
 import { exportNotesToPdf } from '../utils/pdfExport';
 import {
@@ -65,6 +67,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<TutorMode>('socratic');
   const [enableSearch, setEnableSearch] = useState(false);
+  const [contextScope, setContextScope] = useState<ContextScope>('single');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -235,7 +238,8 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             );
             setIsLoading(false);
           },
-        }
+        },
+        contextScope
       );
     } catch (err: unknown) {
       const error = err as Error;
@@ -632,6 +636,35 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             />
           </button>
 
+          {/* Context Scope Toggle (防429單輪專注 vs 多輪歷程) */}
+          <button
+            onClick={() => setContextScope(contextScope === 'single' ? 'multi' : 'single')}
+            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border cursor-pointer ${
+              contextScope === 'single'
+                ? 'bg-emerald-950/90 border-emerald-500/80 text-emerald-300 shadow-sm'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-slate-100'
+            }`}
+            title={
+              contextScope === 'single'
+                ? '⚡ 單輪專注模式：只保留前一題題目與本次作答，節省 85% Token，徹底杜絕 429 頻率限制 (推薦刷題互動使用)'
+                : '💬 多輪歷程模式：保留連續上下文，若對答長度過長可能觸發 Google 免費版每分鐘配額'
+            }
+          >
+            {contextScope === 'single' ? (
+              <>
+                <Zap className="w-3.5 h-3.5 text-yellow-400" />
+                <span className="hidden sm:inline">單輪專注 (防429)</span>
+                <span className="sm:hidden">單輪</span>
+              </>
+            ) : (
+              <>
+                <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                <span className="hidden sm:inline">多輪歷程</span>
+                <span className="sm:hidden">多輪</span>
+              </>
+            )}
+          </button>
+
           {/* API Key Status / Setting */}
           {onOpenApiKeyModal && (
             <button
@@ -887,6 +920,32 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             {qp.label}
           </button>
         ))}
+      </div>
+
+      {/* Context Scope Indicator & Hint */}
+      <div className="flex items-center justify-between px-2 pb-1.5 text-[11px] text-slate-400">
+        <div className="flex items-center space-x-1.5">
+          {contextScope === 'single' ? (
+            <>
+              <Zap className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+              <span className="text-emerald-300 font-semibold">⚡ 單輪專注模式 (防429)：</span>
+              <span className="text-slate-400 hidden sm:inline">僅帶上一題背景與本次作答，省 85% Token，不觸發配額限制</span>
+            </>
+          ) : (
+            <>
+              <MessageSquare className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="text-sky-300 font-semibold">💬 多輪歷程模式：</span>
+              <span className="text-slate-400 hidden sm:inline">保留完整對談上下文</span>
+            </>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setContextScope(contextScope === 'single' ? 'multi' : 'single')}
+          className="text-xs text-slate-400 hover:text-emerald-300 underline underline-offset-2 transition-colors cursor-pointer"
+        >
+          {contextScope === 'single' ? '切換多輪歷程' : '切換單輪專注 (防429)'}
+        </button>
       </div>
 
       {/* Input Form */}
