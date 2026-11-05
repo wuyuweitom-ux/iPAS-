@@ -676,14 +676,14 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
               }`}
               title={
                 hasApiKey()
-                  ? `目前使用單一模型：${getStoredModel() === 'auto' ? 'gemini-2.5-flash-lite (預設高配額)' : getStoredModel()} (點擊更換)`
+                  ? `目前使用單一模型：${getStoredModel()} (點擊更換)`
                   : '點擊設定 Gemini API Key'
               }
             >
               <Key className="w-3.5 h-3.5" />
               <span className="hidden md:inline">
                 {hasApiKey()
-                  ? `模型: ${getStoredModel() === 'auto' ? '2.5-flash-lite' : getStoredModel().replace('gemini-', '')}`
+                  ? `模型: ${getStoredModel().replace('gemini-', '')}`
                   : '設定 Key'}
               </span>
             </button>

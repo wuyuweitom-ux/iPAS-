@@ -22,12 +22,11 @@ export interface ModelOption {
 }
 
 export const DEFAULT_MODELS: ModelOption[] = [
-  { id: 'auto', name: 'Auto 自動鎖定 (固定使用 gemini-2.5-flash-lite，超高配額極速・推薦)' },
-  { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite (2.5 Flash Lite・極低延遲與高 TPM/RPM 配額)' },
-  { id: 'gemini-flash-latest', name: 'gemini-flash-latest (官方 Flash 最新穩定版)' },
-  { id: 'gemini-flash-lite-latest', name: 'gemini-flash-lite-latest (官方 Lite 最新別名)' },
-  { id: 'gemini-3.1-flash-lite-preview', name: 'gemini-3.1-flash-lite-preview (3.1 Flash Lite 預覽版)' },
-  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (3.8 Flash 旗艦版)' },
+  { id: 'gemini-flash-latest', name: 'gemini-flash-latest (Google 官方最新穩定版・推薦)' },
+  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (Gemini 3.8 Flash 最新版)' },
+  { id: 'gemini-3.5-flash-lite', name: 'gemini-3.5-flash-lite (Google 推薦輕量高速版)' },
+  { id: 'gemini-3.1-flash-lite', name: 'gemini-3.1-flash-lite (3.1 Flash Lite)' },
+  { id: 'auto', name: 'Auto 自動鎖定 (預設使用 gemini-flash-latest)' },
 ];
 
 export function getStoredApiKey(): string {
@@ -60,9 +59,14 @@ export function hasApiKey(): boolean {
 
 export function getStoredModel(): string {
   try {
-    return localStorage.getItem(MODEL_STORAGE_KEY) || 'auto';
+    const m = localStorage.getItem(MODEL_STORAGE_KEY) || 'gemini-flash-latest';
+    // 自動將已被 Google 停用之 2.5-flash-lite 或 auto 遷移至最新穩定版 gemini-flash-latest
+    if (m === 'auto' || m === 'gemini-2.5-flash-lite' || m.includes('2.5-flash-lite')) {
+      return 'gemini-flash-latest';
+    }
+    return m;
   } catch {
-    return 'auto';
+    return 'gemini-flash-latest';
   }
 }
 
@@ -403,12 +407,12 @@ export async function streamGeminiChat(
 
   const userPreferredModel = getStoredModel();
   
-  // 嚴格單一模型策略：只挑選使用者指定的單一模型（若為 auto 則固定使用官方最新且配額極高的 gemini-2.5-flash-lite）
+  // 嚴格單一模型策略：只挑選使用者指定的單一模型（預設使用 Google 官方最新穩定版 gemini-flash-latest）
   // 絕不輪詢或連鎖重試其他模型，徹底消除多模型連鎖請求耗盡 RPM/TPM 限額的問題！
   const targetModel =
-    userPreferredModel && userPreferredModel !== 'auto'
+    userPreferredModel && userPreferredModel !== 'auto' && !userPreferredModel.includes('2.5-flash-lite')
       ? userPreferredModel
-      : 'gemini-2.5-flash-lite';
+      : 'gemini-flash-latest';
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
 
@@ -428,6 +432,28 @@ export async function streamGeminiChat(
         });
       }
     );
+
+    // 若因 404 (舊模型已遭 Google 停用) 失敗，自動切換至 Google 官方最新穩定版 gemini-flash-latest 救援一次
+    if (!result.ok && result.status === 404 && targetModel !== 'gemini-flash-latest') {
+      console.warn(`[Gemini API] 模型 ${targetModel} 遭遇 404，自動使用 gemini-flash-latest 恢復`);
+      setStoredModel('gemini-flash-latest');
+      const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+      result = await executeModelStream(
+        fallbackUrl,
+        contents,
+        systemPrompt,
+        shouldUseWebSearch,
+        callbacks.onChunk,
+        (urls) => {
+          groundingUrls = urls;
+          callbacks.onMetadata?.({
+            ragCitations: ragData.citations,
+            groundingUrls: urls,
+            sourceMode,
+          });
+        }
+      );
+    }
 
     // 若該模型因不支援 googleSearch 工具而回傳 400 (非 API Key 無效)，僅對同一模型以不帶 tools 重試一次
     if (

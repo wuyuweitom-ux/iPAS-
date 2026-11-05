@@ -38,7 +38,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
 }) => {
   const [keyInput, setKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('auto');
+  const [selectedModel, setSelectedModel] = useState('gemini-flash-latest');
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODELS);
   const [hasExistingKey, setHasExistingKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -69,7 +69,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
       const detected = await fetchAvailableModelsForKey(keyToTest.trim());
       if (detected.length > 0) {
         const dynamicOptions: ModelOption[] = [
-          { id: 'auto', name: 'Auto 智慧自動選擇 (優先選擇低負載可用模型，推薦)' },
+          { id: 'auto', name: 'Auto 自動鎖定 (預設使用 gemini-flash-latest，推薦)' },
           ...detected.map((id) => ({
             id,
             name: `${id} (已驗證您的金鑰支援)`,
