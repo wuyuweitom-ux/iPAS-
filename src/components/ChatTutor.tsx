@@ -203,6 +203,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
             : m
         )
       );
+    } finally {
       setIsLoading(false);
     }
   };
