@@ -22,12 +22,12 @@ export interface ModelOption {
 }
 
 export const DEFAULT_MODELS: ModelOption[] = [
-  { id: 'auto', name: 'Auto 智慧自動選擇 (優先低負載與高 RPM 穩定模型，推薦)' },
-  { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite (2.5 Flash Lite・極低延遲與高配額)' },
+  { id: 'auto', name: 'Auto 自動鎖定 (固定使用 gemini-2.5-flash-lite，超高配額極速・推薦)' },
+  { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite (2.5 Flash Lite・極低延遲與高 TPM/RPM 配額)' },
+  { id: 'gemini-flash-latest', name: 'gemini-flash-latest (官方 Flash 最新穩定版)' },
   { id: 'gemini-flash-lite-latest', name: 'gemini-flash-lite-latest (官方 Lite 最新別名)' },
-  { id: 'gemini-flash-latest', name: 'gemini-flash-latest (官方 Flash 最新穩定別名)' },
-  { id: 'gemini-3.1-flash-lite-preview', name: 'gemini-3.1-flash-lite-preview (3.1 Flash Lite)' },
-  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (3.8 Flash)' },
+  { id: 'gemini-3.1-flash-lite-preview', name: 'gemini-3.1-flash-lite-preview (3.1 Flash Lite 預覽版)' },
+  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (3.8 Flash 旗艦版)' },
 ];
 
 export function getStoredApiKey(): string {
@@ -403,119 +403,103 @@ export async function streamGeminiChat(
 
   const userPreferredModel = getStoredModel();
   
-  // 最佳候選模型清單：優先使用最新低延遲且免受停用影響的模型
-  const defaultFallbacks = [
-    'gemini-2.5-flash-lite',
-    'gemini-flash-lite-latest',
-    'gemini-flash-latest',
-    'gemini-3.1-flash-lite-preview',
-    'gemini-3.8-flash',
-  ];
+  // 嚴格單一模型策略：只挑選使用者指定的單一模型（若為 auto 則固定使用官方最新且配額極高的 gemini-2.5-flash-lite）
+  // 絕不輪詢或連鎖重試其他模型，徹底消除多模型連鎖請求耗盡 RPM/TPM 限額的問題！
+  const targetModel =
+    userPreferredModel && userPreferredModel !== 'auto'
+      ? userPreferredModel
+      : 'gemini-2.5-flash-lite';
 
-  let candidateModels: string[];
-  if (userPreferredModel === 'auto') {
-    candidateModels = [...defaultFallbacks];
-  } else {
-    candidateModels = [
-      userPreferredModel,
-      ...defaultFallbacks.filter((m) => m !== userPreferredModel),
-    ];
-  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
 
-  // 限制重試次數：若遭遇 429 配額限制，最多只嘗試前 2 個模型，絕對不進行「五個模型連續連環重試」，避免短時間內消耗完整分鐘 RPM/TPM 限額
-  let triedQuotaErrorCount = 0;
+  try {
+    let result = await executeModelStream(
+      url,
+      contents,
+      systemPrompt,
+      shouldUseWebSearch,
+      callbacks.onChunk,
+      (urls) => {
+        groundingUrls = urls;
+        callbacks.onMetadata?.({
+          ragCitations: ragData.citations,
+          groundingUrls: urls,
+          sourceMode,
+        });
+      }
+    );
 
-  for (const modelToTry of candidateModels) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-
-    try {
-      let result = await executeModelStream(
+    // 若該模型因不支援 googleSearch 工具而回傳 400 (非 API Key 無效)，僅對同一模型以不帶 tools 重試一次
+    if (
+      !result.ok &&
+      result.status === 400 &&
+      shouldUseWebSearch &&
+      !result.errorMessage.includes('API_KEY_INVALID') &&
+      !result.errorMessage.toLowerCase().includes('api key not valid')
+    ) {
+      result = await executeModelStream(
         url,
         contents,
         systemPrompt,
-        shouldUseWebSearch,
+        false,
         callbacks.onChunk,
-        (urls) => {
-          groundingUrls = urls;
-          callbacks.onMetadata?.({
-            ragCitations: ragData.citations,
-            groundingUrls: urls,
-            sourceMode,
-          });
-        }
+        () => {}
       );
+    }
 
-      // 若該模型因不支援 googleSearch 工具而回傳 400 (非 API Key 無效)，自動以不帶 tools 重試一次
+    if (!result.ok) {
+      // 1. API Key 無效
       if (
-        !result.ok &&
         result.status === 400 &&
-        shouldUseWebSearch &&
-        !result.errorMessage.includes('API_KEY_INVALID') &&
-        !result.errorMessage.toLowerCase().includes('api key not valid')
+        (result.errorMessage.includes('API_KEY_INVALID') ||
+          result.errorMessage.toLowerCase().includes('api key not valid'))
       ) {
-        result = await executeModelStream(
-          url,
-          contents,
-          systemPrompt,
-          false,
-          callbacks.onChunk,
-          () => {}
+        callbacks.onError(
+          new Error('您的 Gemini API Key 無效，請點擊右上角「API Key 設定」重新檢查並貼上正確金鑰。')
         );
-      }
-
-      if (!result.ok) {
-        // 1. API Key 無效
-        if (
-          result.status === 400 &&
-          (result.errorMessage.includes('API_KEY_INVALID') ||
-            result.errorMessage.toLowerCase().includes('api key not valid'))
-        ) {
-          callbacks.onError(
-            new Error('您的 Gemini API Key 無效，請點擊右上角「API Key 設定」重新檢查並貼上正確金鑰。')
-          );
-          return;
-        }
-
-        // 2. 403 權限拒絕
-        if (result.status === 403) {
-          callbacks.onError(new Error(`API 權限被拒 (403)：${result.errorMessage}`));
-          return;
-        }
-
-        // 3. 429 配額超限 (RPM/TPM Rate Limit)
-        if (result.status === 429 || result.errorMessage.includes('quota') || result.errorMessage.includes('RESOURCE_EXHAUSTED')) {
-          triedQuotaErrorCount++;
-          console.warn(`[Gemini Rate Limit] 模型 ${modelToTry} 遭遇 429 頻率限制: ${result.errorMessage}`);
-          
-          // 若已經連續兩次遇到 429，說明該 API Key 當前分鐘的 RPM 或 TPM 已達上限，立即無縫啟動本機 RAG 離線題庫引擎解析，保障刷題不中斷
-          if (triedQuotaErrorCount >= 2) {
-            callbacks.onChunk(
-              '💡 **【系統提示：Google API 目前處於短暫每分鐘頻率尖峰 (429 Rate Limit)，已為您無縫啟動「本機 RAG 離線題庫與考點知識庫」繼續解答，備考進度不中斷！】**\n\n'
-            );
-            simulateOfflineResponse(latestUserQuery, mode, ragData.citations, callbacks);
-            return;
-          }
-          
-          // 等待 800ms 後再嘗試下一個輕量模型
-          await new Promise((resolve) => setTimeout(resolve, 800));
-          continue;
-        }
-
-        continue;
-      }
-
-      if (result.receivedAnyText) {
-        callbacks.onMetadata?.({
-          ragCitations: ragData.citations,
-          groundingUrls,
-          sourceMode,
-        });
-        callbacks.onDone();
         return;
       }
-    } catch {
-      continue;
+
+      // 2. 403 權限拒絕
+      if (result.status === 403) {
+        callbacks.onError(new Error(`API 權限被拒 (403)：${result.errorMessage}`));
+        return;
+      }
+
+      // 3. 429 配額超限 (RPM/TPM Rate Limit)
+      if (
+        result.status === 429 ||
+        result.errorMessage.includes('quota') ||
+        result.errorMessage.includes('RESOURCE_EXHAUSTED')
+      ) {
+        console.warn(`[Gemini Rate Limit] 模型 ${targetModel} 遭遇 429 頻率限制: ${result.errorMessage}`);
+        callbacks.onChunk(
+          `💡 **【系統提示：模型「${targetModel}」觸發每分鐘頻率限制 (429 Rate Limit)，已由本機 RAG 離線題庫與考點知識庫即時為您無縫解答，絕不耗費額外配額！】**\n\n`
+        );
+        simulateOfflineResponse(latestUserQuery, mode, ragData.citations, callbacks);
+        return;
+      }
+
+      // 4. 其他模型報錯
+      callbacks.onError(
+        new Error(`[${targetModel}] 請求失敗 (${result.status})：${result.errorMessage}`)
+      );
+      return;
     }
+
+    if (result.receivedAnyText) {
+      callbacks.onMetadata?.({
+        ragCitations: ragData.citations,
+        groundingUrls,
+        sourceMode,
+      });
+      callbacks.onDone();
+      return;
+    }
+  } catch (err: unknown) {
+    const error = err as Error;
+    callbacks.onError(new Error(`[${targetModel}] 連線發生例外：${error.message}`));
+    return;
   }
 
   // 若仍無法完成，自動呼叫離線知識庫與 RAG 內容為考生作答，不中斷備考進度

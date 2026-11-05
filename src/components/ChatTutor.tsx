@@ -26,7 +26,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { ChatMessage, TutorMode } from '../types';
-import { streamGeminiChat, hasApiKey, ContextScope } from '../services/geminiService';
+import { streamGeminiChat, hasApiKey, ContextScope, getStoredModel } from '../services/geminiService';
 import { getAllRagDocuments, uploadFileToRag } from '../services/ragService';
 import { exportNotesToPdf } from '../utils/pdfExport';
 import {
@@ -674,10 +674,18 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({
                   ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/60'
                   : 'bg-amber-950/60 border-amber-700/50 text-amber-300 hover:bg-amber-900/60'
               }`}
-              title={hasApiKey() ? '已儲存個人 Gemini Key' : '點擊設定 Gemini Key'}
+              title={
+                hasApiKey()
+                  ? `目前使用單一模型：${getStoredModel() === 'auto' ? 'gemini-2.5-flash-lite (預設高配額)' : getStoredModel()} (點擊更換)`
+                  : '點擊設定 Gemini API Key'
+              }
             >
               <Key className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">{hasApiKey() ? 'Key 已設' : '設定 Key'}</span>
+              <span className="hidden md:inline">
+                {hasApiKey()
+                  ? `模型: ${getStoredModel() === 'auto' ? '2.5-flash-lite' : getStoredModel().replace('gemini-', '')}`
+                  : '設定 Key'}
+              </span>
             </button>
           )}
 
